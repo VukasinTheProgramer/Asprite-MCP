@@ -1,0 +1,34 @@
+name: CI
+
+on:
+  push:
+    branches: [main, dev]
+  pull_request:
+    branches: [main, dev]
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+
+      - name: Install dependencies
+        run: uv sync
+
+      - name: mypy
+        run: uv run mypy src
+
+      - name: pytest
+        # No Aseprite binary in CI — integration tests skip cleanly
+        # (conftest.py), unit tests (OKLab, grid parsing, path jail, etc.)
+        # run everywhere. See CLAUDE.md's testing section.
+        run: uv run pytest tests/ -v

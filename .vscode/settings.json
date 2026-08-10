@@ -1,0 +1,12 @@
+{
+  "files.exclude": {
+    "**/.venv": true,
+    "**/__pycache__": true,
+    "**/.mypy_cache": true
+  },
+  "search.exclude": {
+    "**/.venv": true
+  },
+  "python.analysis.exclude": ["**/.venv"],
+  "python.analysis.ignore": ["**/.venv"]
+}
