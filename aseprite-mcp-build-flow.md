@@ -964,6 +964,14 @@ Returning **both** the rendered image and the text grid measurably improves the 
 
 Ship as JSON in `palettes/`: `pico8` (16), `db16`, `db32`, `aap64`, `endesga32`, `nes` (54), `gameboy` (4), `cga` (16), `sweetie16`, `resurrect64`.
 
+> **Shipped in M4 (2026-08-10): `pico8`, `db16`, `sweetie16`, `gameboy` only.** These are the ones
+> a specific, verifiable hex list could be sourced for without guessing. `db32`, `aap64`,
+> `endesga32`, `nes`, `cga`, `resurrect64` are real, well-known palettes with values easy to get
+> subtly wrong from memory — a "PICO-8 palette" that isn't the actual PICO-8 palette defeats the
+> point of a curated preset. Add them with hex sourced from the palette's own reference (LSPal,
+> Lospec, or the original release), not recalled — and validate each new preset visually against a
+> reference chart before trusting it, the same way the four here were checked before shipping.
+
 ```json
 {"name": "PICO-8", "colors": ["#000000","#1D2B53","#7E2553","#008751", "..."],
  "notes": "Classic 16-color fantasy console palette. Good for chunky, high-contrast sprites."}
@@ -1351,7 +1359,7 @@ Reasonable, and there's precedent for community tools getting linked from the do
 | **M1** Skeleton | MCPServer + lifespan + discovery + 1 tool | ✅ `create_sprite` works end to end via the real MCP `Client` against the real binary |
 | **M2** Draw | `get_sprite_info`, `draw_grid`, `draw_shape`, `fill` | ✅ Verified: exact pixel round-trip on `draw_grid`, line/filled-rect/mirror/flood-fill all correct on `draw_shape`/`fill`. Found `J.sprite()` unusable in batch as originally written, and `app.useTool` silently shrinking a fresh cel — both fixed in the prelude (§3.2, §15) |
 | **M3** Vision | `render_preview` + auto-preview + `get_region_as_grid` | ✅ Every mutating tool returns text+preview via `emit()`. `draw_grid`→`get_region_as_grid` canary test passes exact. Found index-0 is ambiguous (transparent vs. explicit paint) at the pixel level — `.` wins unconditionally. Ruler overlay / alpha checkerboard / contact-sheet (§6.5) deferred, not required for the loop to work |
-| **M4** Color | Palette presets, `set_palette`, `get_ramp` | Swatch images returned; indexed drawing works |
+| **M4** Color | Palette presets, `set_palette`, `get_ramp` | ✅ Verified end to end: `set_palette` changes are real (confirmed rendered pixel color matches PICO-8's actual index-1 hex), swatch + sprite preview both returned, `get_ramp` produces a real hue-shifted ramp. Bundled only presets with verified-accurate hex (pico8, db16, sweetie16, gameboy) — did not fabricate hex for db32/nes/aap64/endesga32/cga/resurrect64 from uncertain memory |
 | **M5** Structure | `layers`, `frames`, `tags` | Can build a 4-frame tagged animation |
 | **M6** Reference | `import_reference` | Photo → usable 32×32 quantized starting point |
 | **M7** Export | `export` all three formats | Spritesheet + JSON loads in a game engine |
@@ -1384,6 +1392,7 @@ Reasonable, and there's precedent for community tools getting linked from the do
 | Reading `stderr` for batch Lua errors | Error message empty/generic (`"no result marker in output"`), real traceback silently dropped | Aseprite writes uncaught Lua errors to **stdout**, not stderr, with a non-zero exit code — confirmed by direct probe. Read `stdout` first in the error path |
 | `app.useTool` on a fresh, untouched cel | Cel silently shrinks to the stroke's bounding box, not canvas size — later `getPixel(x,y)` at canvas coords reads wrong/out-of-range | Confirmed empirically (M2 spike, 2026-08-10). Call `J.normalize_cel(spr, cel)` after any `useTool`-driven op |
 | Palette index 0 read back via legend | Round-trips as `'0'` instead of `'.'` if the legend also maps a character to 0 (default legend's `'0'` does) — `draw_grid` → `get_region_as_grid` fails its own canary test | Aseprite composites index 0 as alpha=0 (the sprite's `transparentColor`) regardless of whether it was explicitly painted or never touched — the two are indistinguishable at the pixel level. `'.' ` must always win for index 0 in the reverse mapping, never legend-overridable (M3 spike, 2026-08-10) |
+| `Color("#rrggbb")` single-arg hex constructor | Silently returns black — no error, no exception, just wrong | Confirmed empirically (M4 spike, 2026-08-10): only `Color{r=,g=,b=,a=}` and `Color(r,g,b)` with parsed integer components actually work. Parse hex to RGBA in **Python** (`hex_to_rgba` in `validation.py`) before ever embedding a color in generated Lua |
 | One tool per Lua call | Tool bloat, poor selection | `action` enums + `run_lua` escape hatch |
 | No preview on mutations | Model draws blind | Auto-preview helper on every mutating tool |
 | Returning an error dict | `is_error=False` — reads as success, model never retries | Raise `ToolError`; never return it |

@@ -57,6 +57,23 @@ def preview_image(png: bytes) -> MCPImage:
     return MCPImage(data=png, format="png")
 
 
+def render_palette_swatch(colors: list[str], swatch: int = 32) -> bytes:
+    """A horizontal strip, one square per color. No Aseprite round-trip —
+    pure Pillow. "The model choosing colors it can see is materially better
+    than it choosing from hex strings" (§7.2)."""
+    from PIL import ImageDraw
+
+    from .validation import hex_to_rgba
+
+    im = Image.new("RGBA", (swatch * len(colors), swatch), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(im)
+    for i, hex_color in enumerate(colors):
+        draw.rectangle([i * swatch, 0, (i + 1) * swatch - 1, swatch - 1], fill=hex_to_rgba(hex_color))
+    buf = io.BytesIO()
+    im.save(buf, "PNG")
+    return buf.getvalue()
+
+
 def emit(
     bridge: AsepriteBridge,
     previews_dir: Path,
