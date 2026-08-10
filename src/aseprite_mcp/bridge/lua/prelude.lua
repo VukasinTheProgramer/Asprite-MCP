@@ -1,12 +1,27 @@
 -- prelude.lua (concatenated ahead of each command chunk)
 local J = {}
 
+-- Lua's %q produces re-loadable LUA source: a literal newline is escaped as
+-- a backslash followed by an actual newline character, not the two-character
+-- \n JSON expects. json.loads() on the Python side then chokes on the raw
+-- control character. Confirmed empirically (M5 spike, 2026-08-10): a pcall'd
+-- error() whose message contains a Lua stack traceback (always multi-line)
+-- broke every result that tried to return it as encoded data. Escape for
+-- JSON explicitly instead of delegating to %q.
+local ESCAPES = { ['\\'] = '\\\\', ['"'] = '\\"', ['\n'] = '\\n', ['\r'] = '\\r', ['\t'] = '\\t' }
+function J.encode_string(s)
+  local out = s:gsub('[%c\\"]', function(c)
+    return ESCAPES[c] or string.format('\\u%04x', c:byte())
+  end)
+  return '"' .. out .. '"'
+end
+
 function J.encode(v)
   local t = type(v)
   if v == nil then return "null"
   elseif t == "boolean" then return tostring(v)
   elseif t == "number" then return tostring(v)
-  elseif t == "string" then return string.format("%q", v)
+  elseif t == "string" then return J.encode_string(v)
   elseif t == "table" then
     if #v > 0 or next(v) == nil then
       local parts = {}
@@ -15,7 +30,7 @@ function J.encode(v)
     else
       local parts = {}
       for k, val in pairs(v) do
-        parts[#parts+1] = string.format("%q", tostring(k)) .. ":" .. J.encode(val)
+        parts[#parts+1] = J.encode_string(tostring(k)) .. ":" .. J.encode(val)
       end
       return "{" .. table.concat(parts, ",") .. "}"
     end

@@ -333,12 +333,27 @@ Prepend this to every command. It gives you JSON encoding, transaction wrapping,
 -- prelude.lua (concatenated ahead of each command chunk)
 local J = {}
 
+-- Lua's %q produces re-loadable LUA source: a literal newline is escaped as
+-- a backslash followed by an actual newline character, not the two-character
+-- \n JSON expects. json.loads() on the Python side then chokes on the raw
+-- control character. Confirmed empirically (M5 spike, 2026-08-10): a pcall'd
+-- error() whose message contains a Lua stack traceback (always multi-line)
+-- broke every result that tried to return it as encoded data. Escape for
+-- JSON explicitly instead of delegating to %q.
+local ESCAPES = { ['\\'] = '\\\\', ['"'] = '\\"', ['\n'] = '\\n', ['\r'] = '\\r', ['\t'] = '\\t' }
+function J.encode_string(s)
+  local out = s:gsub('[%c\\"]', function(c)
+    return ESCAPES[c] or string.format('\\u%04x', c:byte())
+  end)
+  return '"' .. out .. '"'
+end
+
 function J.encode(v)
   local t = type(v)
   if v == nil then return "null"
   elseif t == "boolean" then return tostring(v)
   elseif t == "number" then return tostring(v)
-  elseif t == "string" then return string.format("%q", v)
+  elseif t == "string" then return J.encode_string(v)
   elseif t == "table" then
     if #v > 0 or next(v) == nil then
       local parts = {}
@@ -347,7 +362,7 @@ function J.encode(v)
     else
       local parts = {}
       for k, val in pairs(v) do
-        parts[#parts+1] = string.format("%q", tostring(k)) .. ":" .. J.encode(val)
+        parts[#parts+1] = J.encode_string(tostring(k)) .. ":" .. J.encode(val)
       end
       return "{" .. table.concat(parts, ",") .. "}"
     end
@@ -1360,7 +1375,7 @@ Reasonable, and there's precedent for community tools getting linked from the do
 | **M2** Draw | `get_sprite_info`, `draw_grid`, `draw_shape`, `fill` | ✅ Verified: exact pixel round-trip on `draw_grid`, line/filled-rect/mirror/flood-fill all correct on `draw_shape`/`fill`. Found `J.sprite()` unusable in batch as originally written, and `app.useTool` silently shrinking a fresh cel — both fixed in the prelude (§3.2, §15) |
 | **M3** Vision | `render_preview` + auto-preview + `get_region_as_grid` | ✅ Every mutating tool returns text+preview via `emit()`. `draw_grid`→`get_region_as_grid` canary test passes exact. Found index-0 is ambiguous (transparent vs. explicit paint) at the pixel level — `.` wins unconditionally. Ruler overlay / alpha checkerboard / contact-sheet (§6.5) deferred, not required for the loop to work |
 | **M4** Color | Palette presets, `set_palette`, `get_ramp` | ✅ Verified end to end: `set_palette` changes are real (confirmed rendered pixel color matches PICO-8's actual index-1 hex), swatch + sprite preview both returned, `get_ramp` produces a real hue-shifted ramp. Bundled only presets with verified-accurate hex (pico8, db16, sweetie16, gameboy) — did not fabricate hex for db32/nes/aap64/endesga32/cga/resurrect64 from uncertain memory |
-| **M5** Structure | `layers`, `frames`, `tags` | Can build a 4-frame tagged animation |
+| **M5** Structure | `layers`, `frames`, `tags` | ✅ Verified end to end: add/set/list/reorder/duplicate/merge_down on layers, add/duplicate/delete/set_duration on frames, add/rename/list on tags. Found `frame.frameNumber` is read-only and `app.command.MoveFrame` doesn't exist — dropped frame reorder rather than fake one. Found `app.command.MergeDownLayer()` silently no-ops on the bottom-most layer — guarded with a layer-count check. Found (and fixed, not just for M5) a latent `J.encode` bug: `%q` isn't valid JSON for multi-line strings |
 | **M6** Reference | `import_reference` | Photo → usable 32×32 quantized starting point |
 | **M7** Export | `export` all three formats | Spritesheet + JSON loads in a game engine |
 | **M8** Guidance | Prompts + resources | `/sprite-character` produces good output unprompted |
@@ -1393,6 +1408,10 @@ Reasonable, and there's precedent for community tools getting linked from the do
 | `app.useTool` on a fresh, untouched cel | Cel silently shrinks to the stroke's bounding box, not canvas size — later `getPixel(x,y)` at canvas coords reads wrong/out-of-range | Confirmed empirically (M2 spike, 2026-08-10). Call `J.normalize_cel(spr, cel)` after any `useTool`-driven op |
 | Palette index 0 read back via legend | Round-trips as `'0'` instead of `'.'` if the legend also maps a character to 0 (default legend's `'0'` does) — `draw_grid` → `get_region_as_grid` fails its own canary test | Aseprite composites index 0 as alpha=0 (the sprite's `transparentColor`) regardless of whether it was explicitly painted or never touched — the two are indistinguishable at the pixel level. `'.' ` must always win for index 0 in the reverse mapping, never legend-overridable (M3 spike, 2026-08-10) |
 | `Color("#rrggbb")` single-arg hex constructor | Silently returns black — no error, no exception, just wrong | Confirmed empirically (M4 spike, 2026-08-10): only `Color{r=,g=,b=,a=}` and `Color(r,g,b)` with parsed integer components actually work. Parse hex to RGBA in **Python** (`hex_to_rgba` in `validation.py`) before ever embedding a color in generated Lua |
+| `%q` for JSON string encoding | `json.loads()` raises `JSONDecodeError` on any Lua string containing a real newline (a `pcall`'d error message with a stack traceback, for one) | `%q` escapes for re-loadable **Lua** source, not JSON — a literal newline becomes a backslash + actual newline, not `\n`. Confirmed empirically (M5 spike, 2026-08-10). `J.encode_string()` escapes explicitly for JSON instead |
+| `layer.stackIndex = n` for reorder | Works | Confirmed (M5 spike) — unlike frames, layers have a writable stack position |
+| `frame.frameNumber = n` for reorder | Throws `Cannot set field frameNumber` — read-only. `app.command.MoveFrame` also doesn't exist on this build | Confirmed empirically (M5 spike, 2026-08-10). No frame-reorder API found — dropped from the `frames` tool's action set rather than guessing one |
+| `app.command.MergeDownLayer()` on the bottom-most layer | Returns cleanly, no error — but doesn't merge anything | `app.command.*` silently no-ops on invalid targets (already flagged generically in this table; confirmed for this specific command in M5). Check the layer count actually changed before reporting success |
 | One tool per Lua call | Tool bloat, poor selection | `action` enums + `run_lua` escape hatch |
 | No preview on mutations | Model draws blind | Auto-preview helper on every mutating tool |
 | Returning an error dict | `is_error=False` — reads as success, model never retries | Raise `ToolError`; never return it |
