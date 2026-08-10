@@ -33,6 +33,12 @@ resources.register(mcp)
 
 
 def main() -> None:
+    import sys
+
+    if "--doctor" in sys.argv:
+        from . import doctor
+
+        sys.exit(doctor.run())
     mcp.run(transport="stdio")
 
 
