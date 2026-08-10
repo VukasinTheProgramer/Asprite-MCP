@@ -860,11 +860,21 @@ Spritesheets go through `--sheet`/`--data` on a batch invocation rather than the
 
 ```python
 @mcp.tool()
-def run_lua(script: str, preview: bool = True, timeout: float = 15.0) -> list[str | MCPImage]:
-    """Execute arbitrary Lua against the active sprite. Use when no other
-    tool covers what you need. Runs inside a transaction (rolled back on error).
-    The full Aseprite Lua API is available; `J.sprite()` returns the active sprite."""
+def run_lua(script: str, sprite: str | None = None, preview: bool = True, timeout: float = 15.0) -> list[str | MCPImage]:
+    """Execute arbitrary Lua against a sprite. Use when no other tool covers
+    what you need. A local `path` variable holds the resolved sprite path —
+    the full Aseprite Lua API is available from there, including J.tx() for
+    a transaction around your own mutations."""
 ```
+
+**Not auto-wrapped in a transaction.** The docstring above changed from the original design (`"Runs
+inside a transaction (rolled back on error)"`) because `app.transaction()` needs a document already
+active *at the moment it's called* — confirmed empirically (M9 spike, 2026-08-10): wrapping the
+user's entire script (including their own `J.sprite()` call) in `J.tx()` fails with a hard native
+error (`exited 255`, not even a catchable Lua error), since no sprite is active yet when the
+transaction opens. Resolve the sprite first, transaction-wrap only the mutation — the same order
+every other tool here already uses. Document that pattern for the user rather than trying to
+automate it away.
 
 This one tool means a missing wrapper never blocks a user. Sandbox it per §10.2.
 
@@ -1207,12 +1217,19 @@ Every mutating tool wraps in `J.tx()`. Expose:
 
 ```python
 @mcp.tool()
-def undo(steps: int = 1) -> list[str | MCPImage]: ...
+def undo(steps: Annotated[int, Field(ge=1)] = 1) -> list[str | MCPImage]: ...
 @mcp.tool()
-def redo(steps: int = 1) -> list[str | MCPImage]: ...
+def redo(steps: Annotated[int, Field(ge=1)] = 1) -> list[str | MCPImage]: ...
 ```
 
-`app.undo()` per step. This changes the risk calculus for the user enough to be worth the two tools.
+**Not `app.undo()` per step.** Confirmed empirically (M9 spike, 2026-08-10): batch mode opens a fresh
+Aseprite process per command, so there's no persistent in-memory undo stack — `app.undo()` is a
+silent no-op on a freshly-opened sprite. Implement file-snapshot undo/redo instead
+(`history.py`): every mutating tool copies the sprite's current on-disk state to a history slot
+*before* it changes anything (`push_snapshot`), and `undo`/`redo` restore from those snapshots with
+a standard two-stack model — a new edit after an undo clears the redo branch, same as any editor.
+This still changes the risk calculus for the user enough to be worth the two tools; it just can't be
+Aseprite's own undo stack under this architecture.
 
 ### 10.5 Resource limits
 
@@ -1382,7 +1399,7 @@ Reasonable, and there's precedent for community tools getting linked from the do
 | **M6** Reference | `import_reference` | ✅ OKLab math pinned exactly against Björn Ottosson's own published reference values (white/black/red), not just "runs". End-to-end spatial fidelity verified: a real left-red/right-blue test image survives crop→downscale→quantize with the split intact. Path jail verified both directions (blocked by default, works with `allow_external_path=True`). One deliberate simplification: "reference" and "reference_quantized" hold the same quantized pixels — indexed sprites (our default/recommended mode) can't represent the true-color original the doc's two-layer design implies, so both layers serve as locked-baseline vs. editable-copy instead |
 | **M7** Export | `export` all three formats | ✅ PNG/GIF/spritesheet all verified: real readable files on disk, spritesheet JSON has the right frame count and layout matches `sheet_type`. Found two silent-failure modes in Aseprite's own CLI — a multi-frame sprite to a single PNG exits 0 with no file and no error; an out-of-range `--frame-range` exits 0 and silently exports the wrong frame instead. Both guarded: always check the output file exists regardless of exit code, and validate the frame count via the bridge before invoking the CLI at all |
 | **M8** Guidance | Prompts + resources | ✅ All 5 prompts (`sprite-character` + the 4 "also worth shipping" ones) registered and verified to interpolate args correctly. 3 of 4 planned resources shipped (`guide/pixel-art`, `guide/lua-api`, `palettes`). `aseprite://sprite/current` dropped — not a scope cut, a real SDK constraint: resources get zero dependency injection, so a resource needing session state to know "current" cannot be built at all in this SDK version (see §15) |
-| **M9** Harden | Errors, validation, undo, limits | Fuzzing produces no crashes, only structured errors |
+| **M9** Harden | Errors, validation, undo, limits | ✅ 12-case adversarial pass (negative dims, path traversal, empty/oversized grids, infinite-loop Lua timing out cleanly at 15s, syntax errors, negative coordinates, missing params, negative undo steps) — zero crashes, every case a structured error. `run_lua` sandboxed (`os.execute`/`os.remove`/`io.popen` disabled, verified blocked) and logged. `undo`/`redo` built as file snapshots since Aseprite's own `app.undo()` is a no-op in batch mode — verified empirically, not assumed. Found and fixed a real Protocol/implementation drift: `BatchBridge` silently used a 30s timeout default against a documented 10s contract |
 | **M10** Ship | Packaging, README, `--doctor`, CI | `uvx aseprite-mcp` works on a clean machine |
 
 **Suggested order of attack if time is short:** M0 → M1 → M2 → M3 → M4 → stop and evaluate. That's a genuinely usable product and it's where the quality question gets answered. Everything after M4 is breadth; M3 is depth, and depth is what's missing from the existing servers.
@@ -1419,6 +1436,10 @@ Reasonable, and there's precedent for community tools getting linked from the do
 | `--save-as out.png` on a multi-frame sprite, no `--frame-range` | Exits 0, no output, no error message — the file is simply never created | Aseprite's CLI silently refuses to flatten multiple frames into one PNG. Confirmed empirically (M7 spike, 2026-08-10). Always pass `--frame-range N,N` for PNG export, and check the output file actually exists afterward regardless — never trust exit code 0 alone |
 | `--frame-range` past the sprite's actual frame count | Exits 0, exports the last valid frame instead — no error, no warning, wrong result | Confirmed empirically (M7 spike, 2026-08-10): requesting frame 99 on a 1-frame sprite silently exported frame 1. Validate the frame count via the bridge before ever invoking the CLI |
 | Resource handler declaring `Context` or a `Resolve()`-wrapped param | `ValueError` at server startup: "Context injection for static resources is not supported" (or a URI/param mismatch even when a template variable's name matches) | Confirmed empirically (M8 spike, 2026-08-10): **MCP resources get zero dependency injection in this SDK** — no `Context`, no `Resolve()`, not even on a URI template whose variable name matches the function parameter exactly. A "current sprite" resource needing session state to know what "current" means cannot be built this way at all. Use a tool (`get_sprite_info`) for anything needing live server state; keep resources to pure functions of their URI (or no params) |
+| `app.undo()` in batch mode | No-op — pixel value before and after are identical, no error either | Confirmed empirically (M9 spike, 2026-08-10): batch mode has no persistent in-memory undo stack, since every command is a fresh process opening the sprite from disk. `undo`/`redo` are implemented as file snapshots instead (`history.py`) — a copy of the sprite taken before every mutation, restored on undo. Not Aseprite-native, but achieves the same user-facing safety |
+| Wrapping a whole `run_lua` script (including its own `J.sprite()` call) in `J.tx()` | `aseprite exited 255 with no output` — a hard native failure, not a catchable Lua error | `app.transaction()` requires a document to *already* be active at the moment it's called, not just by the time its callback runs. Confirmed empirically (M9 spike, 2026-08-10). Resolve the sprite **before** opening a transaction — same order every other tool here already uses — never auto-wrap an entire user script |
+| `AsepriteBridge.execute()`'s documented 10s default | `BatchBridge` silently used 30s instead — Python doesn't enforce a Protocol's default value on implementers | Found via M9 resource-limit audit against §10.5, not a crash — just a quiet drift between the interface contract and the concrete class. Fixed to 10.0; check for this class of drift whenever a Protocol default and its implementation could plausibly diverge |
+| `for _ in range(steps)` where `steps` can be negative | `range(-5)` is empty — the loop silently runs zero times, so "undo -5 steps" surfaces a misleading `nothing_to_undo` instead of rejecting the bad input | Found via adversarial testing (M9): reject with `Annotated[int, Field(ge=1)]` at the schema level, don't let a negative count survive into loop logic that happens to swallow it silently |
 | One tool per Lua call | Tool bloat, poor selection | `action` enums + `run_lua` escape hatch |
 | No preview on mutations | Model draws blind | Auto-preview helper on every mutating tool |
 | Returning an error dict | `is_error=False` — reads as success, model never retries | Raise `ToolError`; never return it |

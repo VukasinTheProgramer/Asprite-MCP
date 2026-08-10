@@ -1,4 +1,5 @@
 from dataclasses import dataclass, field
+from pathlib import Path
 
 from .bridge.base import AsepriteBridge
 from .config import Config
@@ -23,6 +24,12 @@ class SessionState:
     bridge: AsepriteBridge | None = None
     sprites: dict[str, SpriteHandle] = field(default_factory=dict)
     active: str | None = None
+    # File-snapshot undo/redo (history.py). Keyed by sprite path. Aseprite's
+    # own app.undo() is a no-op across batch's per-command fresh processes —
+    # there's no persistent in-memory undo stack to call it on. Verified
+    # empirically (M9 spike, 2026-08-10).
+    undo_stack: dict[str, list[Path]] = field(default_factory=dict)
+    redo_stack: dict[str, list[Path]] = field(default_factory=dict)
 
     def resolve_sprite(self, sprite: str | None) -> str:
         """Which sprite a tool should act on: the explicit param, or the active one."""

@@ -5,6 +5,7 @@ from mcp.server.mcpserver import MCPServer
 
 from ..deps import Bridge, Session
 from ..errors import ToolError
+from ..history import push_snapshot
 from ..palettes import load_preset
 from ..render import preview_image, render_palette_swatch, render_preview
 from ..validation import hex_to_rgba, lua_str
@@ -117,6 +118,7 @@ def register(mcp: MCPServer) -> None:
                 "spr:setPalette(pal)\n"
                 "J.save(spr)\n" + read_back
             )
+        push_snapshot(session, path)
         result = bridge.execute(lua)
         final_colors: list[str] = result["hex"]
 

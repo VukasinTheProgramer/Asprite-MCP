@@ -7,6 +7,7 @@ from mcp.server.mcpserver import MCPServer
 from .. import reference as pipeline
 from ..deps import Bridge, Session
 from ..errors import ToolError
+from ..history import push_snapshot
 from ..render import emit
 from ..validation import lua_str, safe_path
 from .drawing import DEFAULT_LEGEND, TRANSPARENT, _canvas_info
@@ -109,6 +110,7 @@ def register(mcp: MCPServer) -> None:
                 "for k = 1, #px2, 3 do rqimg:drawPixel(px2[k], px2[k+1], px2[k+2]) end\n"
                 "rqcel.image = rqimg\n"
             )
+        push_snapshot(session, path)
         bridge.execute(
             f"local spr = J.sprite({lua_str(path)})\n"
             + "\n".join(layer_lua_parts)

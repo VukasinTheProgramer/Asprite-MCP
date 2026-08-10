@@ -1,4 +1,12 @@
 -- prelude.lua (concatenated ahead of each command chunk)
+
+-- Shadow the shell-escape surface before any command (including run_lua's
+-- arbitrary user script) runs. None of our own generated Lua ever needs
+-- these, so shadowing unconditionally costs nothing (CLAUDE.md #10.2).
+os.execute = function() error("os.execute is disabled") end
+os.remove = function() error("os.remove is disabled") end
+io.popen = function() error("io.popen is disabled") end
+
 local J = {}
 
 -- Lua's %q produces re-loadable LUA source: a literal newline is escaped as
