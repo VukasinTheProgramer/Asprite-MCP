@@ -6,6 +6,7 @@ from mcp.types import ToolAnnotations
 
 from ..deps import Bridge, Session
 from ..errors import ToolError
+from ..history import push_snapshot
 from ..render import emit
 from ..validation import lua_str
 
@@ -152,6 +153,7 @@ def register(mcp: MCPServer) -> None:
                 pixels_written += 1
         px_lua = ",".join(str(n) for n in px)
 
+        push_snapshot(session, path)
         bridge.execute(
             f"local spr = J.sprite({lua_str(path)})\n"
             f"{_resolve_layer_lua(layer)}\n"
@@ -345,6 +347,7 @@ def register(mcp: MCPServer) -> None:
                 )
             lua_body = "\n".join(calls) + "\nJ.normalize_cel(spr, __cel)\n"
 
+        push_snapshot(session, path)
         bridge.execute(
             f"local spr = J.sprite({lua_str(path)})\n"
             f"{_resolve_layer_lua(layer)}\n"
@@ -397,6 +400,7 @@ def register(mcp: MCPServer) -> None:
                 message=f"({x},{y}) is outside the {canvas['width']}x{canvas['height']} canvas.",
             )
 
+        push_snapshot(session, path)
         bridge.execute(
             f"local spr = J.sprite({lua_str(path)})\n"
             f"{_resolve_layer_lua(layer)}\n"

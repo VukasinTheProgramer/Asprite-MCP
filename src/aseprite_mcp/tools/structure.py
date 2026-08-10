@@ -5,6 +5,7 @@ from mcp.server.mcpserver import MCPServer
 
 from ..deps import Bridge, Session
 from ..errors import ToolError
+from ..history import push_snapshot
 from ..render import emit
 from ..validation import lua_str
 
@@ -69,6 +70,8 @@ def register(mcp: MCPServer) -> None:
         list: no other params — reports current layers.
         """
         path = session.resolve_sprite(sprite)
+        if action != "list":
+            push_snapshot(session, path)
         summary: str
 
         if action == "add":
@@ -207,6 +210,8 @@ def register(mcp: MCPServer) -> None:
         app.command.MoveFrame doesn't exist on this build (verified, M5).
         """
         path = session.resolve_sprite(sprite)
+        if action != "list":
+            push_snapshot(session, path)
         summary: str
 
         if action == "add":
@@ -286,6 +291,8 @@ def register(mcp: MCPServer) -> None:
         list: no other params — reports current tags.
         """
         path = session.resolve_sprite(sprite)
+        if action != "list":
+            push_snapshot(session, path)
         summary: str
 
         def find_tag_lua() -> str:

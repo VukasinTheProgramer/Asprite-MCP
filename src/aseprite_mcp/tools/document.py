@@ -7,6 +7,7 @@ from pydantic import Field
 
 from ..deps import Bridge, Session
 from ..errors import ToolError
+from ..history import push_snapshot
 from ..render import emit
 from ..state import SpriteHandle
 from ..validation import lua_str, safe_path
@@ -78,6 +79,7 @@ def register(mcp: MCPServer) -> None:
                 context={"path": str(path)},
             )
 
+        push_snapshot(session, str(path))  # no-op if this is a fresh name (nothing to snapshot yet)
         result = bridge.execute(
             f"local spr = Sprite({width}, {height}, {_COLOR_MODE_LUA[color_mode]})\n"
             f"spr.filename = {lua_str(str(path))}\n"

@@ -32,7 +32,11 @@ class BatchBridge:
     def alive(self) -> bool:
         return True
 
-    def execute(self, lua: str, timeout: float = 30.0) -> Any:
+    def execute(self, lua: str, timeout: float = 10.0) -> Any:
+        # 10s matches the AsepriteBridge protocol default and §10.5's
+        # resource limit. Was 30.0 here — silently overriding the protocol's
+        # own documented default, since Python doesn't enforce a Protocol's
+        # default value on implementers (found in M9 audit, 2026-08-10).
         # Same calling convention as the resident bridge: the command is a
         # function body, its `return` value is the result. Tools stay
         # backend-agnostic — they never know which bridge is running them.
