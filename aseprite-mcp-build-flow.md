@@ -355,16 +355,21 @@ function J.encode(v)
   return "null"
 end
 
--- Resolve the sprite the tool should act on.
-function J.sprite(id)
-  if id then
-    for _, s in ipairs(app.sprites) do
-      if s.filename == id then return s end
-    end
-    error("sprite_not_found: " .. tostring(id))
+-- Resolve the sprite at `path`. Checks already-open sprites first (matters
+-- once a resident backend exists), falls back to app.open (batch mode: the
+-- process starts with nothing open — every command opens its own target).
+--
+-- Updated in M2 (2026-08-10): the original `J.sprite(id)` — try app.sprites,
+-- else fall back to app.sprite — assumed a sprite was already open, which is
+-- only ever true for the resident model. Batch mode starts every process
+-- with nothing open, so that version raised no_active_sprite unconditionally.
+function J.sprite(path)
+  for _, s in ipairs(app.sprites) do
+    if s.filename == path then return s end
   end
-  if not app.sprite then error("no_active_sprite") end
-  return app.sprite
+  local spr = app.open(path)
+  if not spr then error("sprite_not_found: " .. tostring(path)) end
+  return spr
 end
 
 -- Wrap mutations so a failure rolls back cleanly and yields one undo step.
@@ -372,6 +377,30 @@ function J.tx(fn)
   local result
   app.transaction(function() result = fn() end)
   return result
+end
+
+-- Batch mode has no persistent state between commands — every mutating
+-- command must save before the process exits, or the edit is lost.
+function J.save(spr)
+  spr:saveAs(spr.filename)
+end
+
+-- app.useTool (and possibly other tool-driven ops) auto-shrinks a cel's image
+-- to its content's bounding box when the cel had no prior non-transparent
+-- content — confirmed empirically (M2 spike, 2026-08-10): a fresh cel drawn
+-- on via useTool comes back at the stroke's bbox size, not the canvas size.
+-- Our tools assume every cel is always full-canvas at position (0,0) — same
+-- assumption draw_grid relies on — so call this after any op that isn't a
+-- plain drawPixel to restore that invariant. No-op if already normalized.
+function J.normalize_cel(spr, cel)
+  if cel.position.x == 0 and cel.position.y == 0
+     and cel.image.width == spr.width and cel.image.height == spr.height then
+    return
+  end
+  local canvas = Image(spr.width, spr.height, spr.colorMode)
+  canvas:drawImage(cel.image, cel.position)
+  cel.image = canvas
+  cel.position = Point(0, 0)
 end
 
 return J
@@ -1319,8 +1348,8 @@ Reasonable, and there's precedent for community tools getting linked from the do
 | Milestone | Deliverable | Done when |
 |---|---|---|
 | **M0** Spike | Working bridge prototype | ✅ Batch bridge validated: 30/30 sequential round-trips, 0 failures, avg 55ms. Resident/Timer bridge found broken on the local dev build (see §15) — parked, not blocking. |
-| **M1** Skeleton | MCPServer + lifespan + discovery + 1 tool | `create_sprite` works from Claude |
-| **M2** Draw | `draw_grid`, `draw_shape`, `fill` | Can hand-write a recognizable sprite via tool calls |
+| **M1** Skeleton | MCPServer + lifespan + discovery + 1 tool | ✅ `create_sprite` works end to end via the real MCP `Client` against the real binary |
+| **M2** Draw | `get_sprite_info`, `draw_grid`, `draw_shape`, `fill` | ✅ Verified: exact pixel round-trip on `draw_grid`, line/filled-rect/mirror/flood-fill all correct on `draw_shape`/`fill`. Found `J.sprite()` unusable in batch as originally written, and `app.useTool` silently shrinking a fresh cel — both fixed in the prelude (§3.2, §15) |
 | **M3** Vision | `render_preview` + auto-preview | Model sees its own output and self-corrects |
 | **M4** Color | Palette presets, `set_palette`, `get_ramp` | Swatch images returned; indexed drawing works |
 | **M5** Structure | `layers`, `frames`, `tags` | Can build a 4-frame tagged animation |
@@ -1353,14 +1382,7 @@ Reasonable, and there's precedent for community tools getting linked from the do
 | Cold-spawn per call | Assumed ~1s latency | Measured 55ms avg on batch (§1.2) — cheaper than the doc originally assumed; don't reach for resident just to chase this |
 | `Timer.ontick` inside a Dialog script | Never fires, or once alive throws `C stack overflow` on `app.fs.listFiles` every tick | Confirmed on Aseprite `1.3.18.1-8-g41252a501-dev` (M0 spike, 2026-08-10). Ship batch; don't debug Timer against a dev build — retest on a stable release before reviving resident |
 | Reading `stderr` for batch Lua errors | Error message empty/generic (`"no result marker in output"`), real traceback silently dropped | Aseprite writes uncaught Lua errors to **stdout**, not stderr, with a non-zero exit code — confirmed by direct probe. Read `stdout` first in the error path |
-| `app.sprite` nil in batch | `no_active_sprite` errors | Always `app.open()` explicitly |
-| In-place `cel.image` mutation | Edits bleed across linked cels | Clone → mutate → assign |
-| RGB-space quantization | Reference imports have wrong hues | Quantize in OKLab/CIELAB |
-| Floyd–Steinberg by default | Noisy, non-pixel-art references | Dithering off by default |
-| Undocumented `app.command` params | Silent no-ops | Test each wrapped command; read `gui.xml` |
-| Unbounded canvas size | Preview token costs explode | Cap at 1024, warn at 128 |
-| f-stringing values into Lua | Injection, syntax errors on quotes/newlines | Type-validate + `%q` escape |
-| Aseprite version drift | Tools break after user updates | Pin range, feature-detect, golden tests |
+| `app.useTool` on a fresh, untouched cel | Cel silently shrinks to the stroke's bounding box, not canvas size — later `getPixel(x,y)` at canvas coords reads wrong/out-of-range | Confirmed empirically (M2 spike, 2026-08-10). Call `J.normalize_cel(spr, cel)` after any `useTool`-driven op |
 | One tool per Lua call | Tool bloat, poor selection | `action` enums + `run_lua` escape hatch |
 | No preview on mutations | Model draws blind | Auto-preview helper on every mutating tool |
 | Returning an error dict | `is_error=False` — reads as success, model never retries | Raise `ToolError`; never return it |
