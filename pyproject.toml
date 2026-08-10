@@ -1,0 +1,19 @@
+[project]
+name = "aseprite-mcp"
+version = "0.1.0"
+description = "MCP server for driving Aseprite — pixel art via LLM tool calls."
+authors = [
+    { name = "VukasinTheProgramer", email = "24798865+VukasinTheProgramer@users.noreply.github.com" }
+]
+requires-python = ">=3.11"
+dependencies = ["mcp>=2.0", "pillow>=10", "numpy>=1.26", "pydantic>=2.12"]
+
+[project.scripts]
+aseprite-mcp = "aseprite_mcp.server:main"
+
+[dependency-groups]
+dev = ["pytest>=8", "pytest-asyncio>=0.24"]
+
+[build-system]
+requires = ["uv_build>=0.12.1,<0.13.0"]
+build-backend = "uv_build"
