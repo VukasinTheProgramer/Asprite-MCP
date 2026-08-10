@@ -139,4 +139,6 @@ These are the failure modes this project is known to hit. Each one cost someone 
 
 ## Commits
 
+`uv run mypy src` clean before every commit. Fix or revert, don't commit past it.
+
 Conventional Commits. Subject ≤50 chars. Body only when the "why" isn't obvious from the diff.
