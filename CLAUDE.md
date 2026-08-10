@@ -62,7 +62,7 @@ These are the failure modes this project is known to hit. Each one cost someone 
 
 ### Images
 
-10. **`Image.NEAREST` for every upscale.** No exceptions. Bilinear makes the model hallucinate anti-aliasing.
+10. **`Image.Resampling.NEAREST` for every upscale.** No exceptions. Bilinear makes the model hallucinate anti-aliasing. (Modern Pillow moved this off the bare `Image.NEAREST` constant — mypy will flag the old spelling as `attr-defined`; confirmed in M3.)
 11. **Preview upscales to 256–512px**, capped at 1024×1024 output. A raw 32×32 PNG is unreadable to a vision encoder.
 12. **Quantize in OKLab/CIELAB**, never RGB Euclidean distance.
 13. **Downscale LANCZOS to ~2× target, then NEAREST.** Not straight to either.

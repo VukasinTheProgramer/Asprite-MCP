@@ -879,7 +879,7 @@ def render_preview(bridge, sprite_path, frame=1, scale="auto",
     im = Image.open(tmp).convert("RGBA")
     if scale == "auto":
         scale = max(1, min(16, max_dim // max(im.width, im.height)))
-    im = im.resize((im.width*scale, im.height*scale), Image.NEAREST)  # NEAREST is mandatory
+    im = im.resize((im.width*scale, im.height*scale), Image.Resampling.NEAREST)  # NEAREST is mandatory
     if grid_overlay:
         im = draw_grid_overlay(im, scale)
     buf = io.BytesIO(); im.save(buf, "PNG")
@@ -1350,7 +1350,7 @@ Reasonable, and there's precedent for community tools getting linked from the do
 | **M0** Spike | Working bridge prototype | ✅ Batch bridge validated: 30/30 sequential round-trips, 0 failures, avg 55ms. Resident/Timer bridge found broken on the local dev build (see §15) — parked, not blocking. |
 | **M1** Skeleton | MCPServer + lifespan + discovery + 1 tool | ✅ `create_sprite` works end to end via the real MCP `Client` against the real binary |
 | **M2** Draw | `get_sprite_info`, `draw_grid`, `draw_shape`, `fill` | ✅ Verified: exact pixel round-trip on `draw_grid`, line/filled-rect/mirror/flood-fill all correct on `draw_shape`/`fill`. Found `J.sprite()` unusable in batch as originally written, and `app.useTool` silently shrinking a fresh cel — both fixed in the prelude (§3.2, §15) |
-| **M3** Vision | `render_preview` + auto-preview | Model sees its own output and self-corrects |
+| **M3** Vision | `render_preview` + auto-preview + `get_region_as_grid` | ✅ Every mutating tool returns text+preview via `emit()`. `draw_grid`→`get_region_as_grid` canary test passes exact. Found index-0 is ambiguous (transparent vs. explicit paint) at the pixel level — `.` wins unconditionally. Ruler overlay / alpha checkerboard / contact-sheet (§6.5) deferred, not required for the loop to work |
 | **M4** Color | Palette presets, `set_palette`, `get_ramp` | Swatch images returned; indexed drawing works |
 | **M5** Structure | `layers`, `frames`, `tags` | Can build a 4-frame tagged animation |
 | **M6** Reference | `import_reference` | Photo → usable 32×32 quantized starting point |
@@ -1383,6 +1383,7 @@ Reasonable, and there's precedent for community tools getting linked from the do
 | `Timer.ontick` inside a Dialog script | Never fires, or once alive throws `C stack overflow` on `app.fs.listFiles` every tick | Confirmed on Aseprite `1.3.18.1-8-g41252a501-dev` (M0 spike, 2026-08-10). Ship batch; don't debug Timer against a dev build — retest on a stable release before reviving resident |
 | Reading `stderr` for batch Lua errors | Error message empty/generic (`"no result marker in output"`), real traceback silently dropped | Aseprite writes uncaught Lua errors to **stdout**, not stderr, with a non-zero exit code — confirmed by direct probe. Read `stdout` first in the error path |
 | `app.useTool` on a fresh, untouched cel | Cel silently shrinks to the stroke's bounding box, not canvas size — later `getPixel(x,y)` at canvas coords reads wrong/out-of-range | Confirmed empirically (M2 spike, 2026-08-10). Call `J.normalize_cel(spr, cel)` after any `useTool`-driven op |
+| Palette index 0 read back via legend | Round-trips as `'0'` instead of `'.'` if the legend also maps a character to 0 (default legend's `'0'` does) — `draw_grid` → `get_region_as_grid` fails its own canary test | Aseprite composites index 0 as alpha=0 (the sprite's `transparentColor`) regardless of whether it was explicitly painted or never touched — the two are indistinguishable at the pixel level. `'.' ` must always win for index 0 in the reverse mapping, never legend-overridable (M3 spike, 2026-08-10) |
 | One tool per Lua call | Tool bloat, poor selection | `action` enums + `run_lua` escape hatch |
 | No preview on mutations | Model draws blind | Auto-preview helper on every mutating tool |
 | Returning an error dict | `is_error=False` — reads as success, model never retries | Raise `ToolError`; never return it |

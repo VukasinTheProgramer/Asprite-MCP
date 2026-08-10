@@ -1,11 +1,21 @@
-from typing import Literal
+from typing import Literal, TypedDict
 
 from mcp.server.mcpserver import Image as MCPImage
 from mcp.server.mcpserver import MCPServer
+from mcp.types import ToolAnnotations
 
 from ..deps import Bridge, Session
 from ..errors import ToolError
+from ..render import emit
 from ..validation import lua_str
+
+
+class RegionGrid(TypedDict):
+    grid: str
+    x: int
+    y: int
+    width: int
+    height: int
 
 TRANSPARENT = "."
 _MAX_PIXELS = 65_000
@@ -159,10 +169,88 @@ def register(mcp: MCPServer) -> None:
             "return { ok = true }"
         )
 
-        blocks: list[str | MCPImage] = [
-            f"Drew {pixels_written} pixels ({width}x{height} at {x},{y})."
-        ]
-        return blocks
+        summary = f"Drew {pixels_written} pixels ({width}x{height} at {x},{y})."
+        return emit(bridge, session.config.previews, path, summary, preview)
+
+    @mcp.tool(annotations=ToolAnnotations(read_only_hint=True))
+    def get_region_as_grid(
+        bridge: Bridge,
+        session: Session,
+        x: int = 0,
+        y: int = 0,
+        width: int | None = None,
+        height: int | None = None,
+        sprite: str | None = None,
+        layer: str | None = None,
+        frame: int = 1,
+        legend: dict[str, int] | None = None,
+    ) -> RegionGrid:
+        """Read a canvas region back as a palette-index text grid — the same
+        format `draw_grid` accepts. Use this to inspect and edit existing
+        pixels. Omit width/height to read the whole canvas.
+        """
+        path = session.resolve_sprite(sprite)
+        canvas = _canvas_info(bridge, path)
+        w = width if width is not None else canvas["width"] - x
+        h = height if height is not None else canvas["height"] - y
+        if x < 0 or y < 0 or w <= 0 or h <= 0 or x + w > canvas["width"] or y + h > canvas["height"]:
+            raise ToolError(
+                code="out_of_bounds",
+                message=f"Region ({x},{y}) sized {w}x{h} is outside the "
+                f"{canvas['width']}x{canvas['height']} canvas.",
+                context={"canvas": {"width": canvas["width"], "height": canvas["height"]}},
+            )
+
+        active_legend = {**DEFAULT_LEGEND, **(legend or {})}
+        index_to_char = {}
+        for char, idx in active_legend.items():
+            index_to_char[idx] = char  # later entries win on collision
+        # Index 0 is the sprite's transparentColor by default — Aseprite composites
+        # it as alpha=0 regardless of whether it was explicitly painted or never
+        # touched (confirmed empirically, M3 spike). '.' always wins here: legend
+        # entries mapping a character to 0 (e.g. the default legend's '0') can't
+        # be told apart from "untouched" at the pixel level, so transparent takes
+        # priority rather than guessing.
+        index_to_char[0] = TRANSPARENT
+
+        result = bridge.execute(
+            f"local spr = J.sprite({lua_str(path)})\n"
+            f"{_resolve_layer_lua(layer)}\n"
+            f"local __frame = {frame}\n"
+            "if not spr.frames[__frame] then error('frame_out_of_range: ' .. __frame) end\n"
+            "local __cel = __layer:cel(__frame)\n"
+            "local rows = {}\n"
+            f"for row = 0, {h - 1} do\n"
+            "  local r = {}\n"
+            f"  for col = 0, {w - 1} do\n"
+            f"    r[col+1] = __cel and __cel.image:getPixel({x}+col, {y}+row) or 0\n"
+            "  end\n"
+            "  rows[row+1] = r\n"
+            "end\n"
+            "return { rows = rows }"
+        )
+
+        unmapped: set[int] = set()
+        lines = []
+        for row in result["rows"]:
+            chars = []
+            for idx in row:
+                if idx in index_to_char:
+                    chars.append(index_to_char[idx])
+                else:
+                    unmapped.add(idx)
+                    chars.append("?")
+            lines.append("".join(chars))
+
+        if unmapped:
+            raise ToolError(
+                code="unrepresentable_pixel_index",
+                message=f"Region contains palette indices with no legend character: {sorted(unmapped)}",
+                hint="Pass a `legend` covering these indices — default legend only covers 0-35.",
+                context={"bad_indices": sorted(unmapped)},
+            )
+
+        return {"grid": "\n".join(lines), "x": x, "y": y, "width": w, "height": h}
 
     @mcp.tool(structured_output=False)
     def draw_shape(
@@ -271,8 +359,8 @@ def register(mcp: MCPServer) -> None:
 
         n_drawn = len(point_sets)
         note = f" (mirrored {mirror})" if mirror != "none" else ""
-        blocks: list[str | MCPImage] = [f"Drew {shape}{note}: {n_drawn} stroke(s)."]
-        return blocks
+        summary = f"Drew {shape}{note}: {n_drawn} stroke(s)."
+        return emit(bridge, session.config.previews, path, summary, preview)
 
     @mcp.tool(structured_output=False)
     def fill(
@@ -327,5 +415,5 @@ def register(mcp: MCPServer) -> None:
             "return { ok = true }"
         )
 
-        blocks: list[str | MCPImage] = [f"Filled from ({x},{y})."]
-        return blocks
+        summary = f"Filled from ({x},{y})."
+        return emit(bridge, session.config.previews, path, summary, preview)
