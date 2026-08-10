@@ -1,0 +1,5 @@
+{
+  "name": "Game Boy",
+  "colors": ["#0f380f", "#306230", "#8bac0f", "#9bbc0f"],
+  "notes": "Classic 4-shade green Game Boy DMG palette. Extreme constraint — good for testing readability at minimum color count."
+}
