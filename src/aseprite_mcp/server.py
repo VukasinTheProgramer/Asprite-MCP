@@ -22,9 +22,9 @@ async def lifespan(server: MCPServer) -> AsyncIterator[SessionState]:
 
 mcp = MCPServer("aseprite", lifespan=lifespan)
 
-from .tools import document, drawing, palette  # noqa: E402 — after `mcp` exists, before registration
+from .tools import document, drawing, palette, structure  # noqa: E402 — after `mcp` exists
 
-for module in (document, drawing, palette):
+for module in (document, drawing, palette, structure):
     module.register(mcp)
 
 

@@ -78,7 +78,11 @@ async def test_set_palette_rejects_invalid_hex(workspace):
         assert "invalid_hex_color" in out.content[0].text
 
 
-async def test_get_ramp_produces_requested_step_count_and_swatch():
+async def test_get_ramp_produces_requested_step_count_and_swatch(workspace):
+    # get_ramp itself needs no sprite/bridge call, but the server's lifespan
+    # still resolves the Aseprite binary unconditionally on every Client
+    # session — `workspace` (pulling in aseprite_exe) is what makes this test
+    # skip cleanly rather than fail when no binary is found.
     async with Client(mcp) as c:
         out = await c.call_tool("get_ramp", {"base_color": "#854c30", "steps": 5})
         assert not out.is_error
@@ -88,7 +92,7 @@ async def test_get_ramp_produces_requested_step_count_and_swatch():
         assert hexes[2] == "#854c30"  # middle step is the base color, unmodified
 
 
-async def test_get_ramp_rejects_too_few_steps():
+async def test_get_ramp_rejects_too_few_steps(workspace):
     async with Client(mcp) as c:
         out = await c.call_tool("get_ramp", {"base_color": "#854c30", "steps": 1})
         assert out.is_error

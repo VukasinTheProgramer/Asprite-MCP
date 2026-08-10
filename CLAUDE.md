@@ -113,7 +113,7 @@ These are the failure modes this project is known to hit. Each one cost someone 
 ## Testing
 
 - Unit tests need no Aseprite: grid parsing, legend mapping, validation, path jail, Lua escaping, quantization, ramps. These run on every commit.
-- Integration tests are marked and skip cleanly when no binary is found.
+- Integration tests are marked and skip cleanly when no binary is found. **This applies even to tools that never touch the bridge** (`get_ramp` is pure `colorsys` math) — `Client(mcp)` enters the lifespan on every session, which resolves the Aseprite binary unconditionally. A test that opens `Client(mcp)` without depending on the `aseprite_exe`/`workspace` fixture chain fails with `RuntimeError` instead of skipping when no binary is present (found in M5, cost a full green-suite run before it was caught).
 - **`draw_grid` → `get_region_as_grid` round-trip is the canary test.** Keep it green; it covers bridge, transaction, palette mapping, and coordinates in one assert.
 - Golden PNGs catch Aseprite version drift. Regenerate deliberately, never "to make CI pass".
 - New non-trivial logic ships with one runnable check. No fixtures-on-fixtures.
