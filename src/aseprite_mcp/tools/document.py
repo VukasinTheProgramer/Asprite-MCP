@@ -7,6 +7,7 @@ from pydantic import Field
 
 from ..deps import Bridge, Session
 from ..errors import ToolError
+from ..render import emit
 from ..state import SpriteHandle
 from ..validation import lua_str, safe_path
 
@@ -90,10 +91,7 @@ def register(mcp: MCPServer) -> None:
         summary = f"Created {name}.aseprite — {width}x{height} {color_mode}."
         if width > _WARN_DIM or height > _WARN_DIM:
             summary += f" Note: above {_WARN_DIM}x{_WARN_DIM}, pixel art gets hard to control."
-        blocks: list[str | MCPImage] = [summary]
-        # Preview rendering lands in M3 (Phase 4) — `preview` is accepted now so
-        # the schema doesn't change later, but produces no image block yet.
-        return blocks
+        return emit(bridge, session.config.previews, result["path"], summary, preview)
 
     @mcp.tool(annotations=ToolAnnotations(read_only_hint=True))
     def get_sprite_info(
