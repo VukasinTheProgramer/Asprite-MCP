@@ -92,7 +92,7 @@ These are the failure modes this project is known to hit. Each one cost someone 
 
 ### SDK 2.x plumbing
 
-26. **`Image` results carry no structured content.** Returning `Image` sets `structured_content=None`, so a preview cannot be a field inside a returned data dict. A tool result is a list of content blocks — mutating tools return `list[str | Image]` (summary text + preview) and carry no output schema; read-only data tools keep their schema and return no image. **Verify this shape in the M1 spike before building 20 tools on the assumption.**
+26. **`Image` results carry no structured content, and you must say so explicitly.** Returning `Image` sets `structured_content=None`, so a preview cannot be a field inside a returned data dict — mutating tools return `list[str | Image]` (summary text + preview) instead. **This does not disable schema generation on its own.** Pydantic cannot build a schema for `Image` and registration crashes at server startup (`PydanticSchemaGenerationError`) unless `@mcp.tool(structured_output=False)` is passed explicitly. Confirmed in M1 (`create_sprite`, 2026-08-10) — this crashed on the first real registration attempt before the kwarg was added. Read-only data tools keep their schema (no `structured_output=False`) and return no image.
 27. **The return type annotation *is* the output schema.** Read-only tools returning data (`get_sprite_info`) use a TypedDict/dataclass/pydantic model, never a bare `dict` with ad-hoc keys. Scalars and lists get wrapped in `{"result": ...}`; objects don't. Use `structured_output=False` for text-only tools.
 28. **Inject the bridge and session state with `Resolve()`**, not module globals and not the closure `register(mcp, get_bridge, state)` pattern:
     ```python

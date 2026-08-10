@@ -615,6 +615,11 @@ Under SDK 2.x the **return annotation is the output schema**, and an `MCPImage` 
 `structured_content = None`. That splits every tool into exactly two kinds. Pick one per tool; never
 try to be both.
 
+> **`structured_output=False` is not automatic.** Pydantic cannot build a schema for `MCPImage` at
+> all — annotating a tool `-> list[str | MCPImage]` without also passing `@mcp.tool(structured_output=False)`
+> crashes at server startup (`PydanticSchemaGenerationError`), not at call time. Confirmed the hard
+> way in M1 (`create_sprite`, 2026-08-10). Every mutating tool needs the kwarg on the decorator itself.
+
 | Kind | Tools | Returns | Schema |
 |---|---|---|---|
 | **Mutating** — returns a preview | `create_sprite`, `draw_grid`, `draw_shape`, `fill`, `layers`, `frames`, `tags`, `set_palette`, `import_reference`, `export`, `run_lua`, `undo`, `redo` | `list[str \| MCPImage]` via `emit()` | none (`structured_output=False`) |
@@ -1361,6 +1366,7 @@ Reasonable, and there's precedent for community tools getting linked from the do
 | Returning an error dict | `is_error=False` — reads as success, model never retries | Raise `ToolError`; never return it |
 | `ToolError` subclassing `MCPError` | Model never sees the error, request just fails | Subclass `Exception`; `MCPError` only for unfixable state |
 | `Image` inside a returned dict | `structured_content` is `None`; schema validation fails | Return `list[str \| Image]` from mutating tools |
+| `list[str \| Image]` return without `structured_output=False` | Server crashes at startup with `PydanticSchemaGenerationError`, not at call time | Always pass `@mcp.tool(structured_output=False)` alongside an `Image`-bearing return type |
 | Decorator injecting a tool kwarg | `inspect.signature` follows `__wrapped__`; param missing from schema | Declare `preview: bool = True` on the tool itself |
 
 ---
