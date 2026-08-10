@@ -234,13 +234,26 @@ print(send('local s = Sprite(32,32); return "\\"created\\""'))
 
 ### 1.2 Spike exit criteria
 
-You may proceed only when all five are true:
+For the **resident** model, proceed only when all five are true:
 
 - [ ] Aseprite starts, the listener runs, and does not peg a CPU core
 - [ ] A command round-trips in **< 50 ms**
 - [ ] An erroring command returns a structured error instead of killing the listener
 - [ ] 200 sequential commands run without the listener dying or leaking files
 - [ ] The process survives being idle for 10 minutes
+
+> **Run result (2026-08-10, Aseprite `1.3.18.1-8-g41252a501-dev`, macOS).** First criterion failed:
+> `Timer.ontick` did not fire across 4 controlled runs (up to 60s, with and without OS-level window
+> focus). When it did fire once, in a process orphaned by an earlier crashed test, `app.fs.listFiles`
+> inside the callback threw `C stack overflow` on every tick — confirmed *not* a problem with
+> `listFiles` itself, which returns instantly when called outside a Timer callback. Root cause
+> unresolved; likely a dev-build-specific bug in the Timer/event-loop integration, not a design
+> flaw in the polling approach itself. **Verdict: resident parked, not blocking** — retest against
+> a stable (non-`-dev`) Aseprite release before reviving it.
+>
+> The **batch** fallback (§3.4) was validated in its place: 30/30 sequential round-trips, 0
+> failures, avg 55ms — well inside the 50ms/command bar and far better than this doc's original
+> ~500ms estimate for batch. M1 onward builds on batch.
 
 If the resident model fails, fall back to **CLI batch spawns** (§3.4) — slower (~0.5s/call) but dead simple. Ship that first; the resident bridge is an optimization behind the same interface.
 
@@ -466,7 +479,7 @@ class BatchBridge:
             os.unlink(script)
 ```
 
-Batch mode caveats: `app.sprite` is usually `nil`, so each command must `app.open(path)` itself; `Dialog()` returns nil; state does not persist across calls, so **every batch command must open → mutate → save**.
+Batch mode caveats: `app.sprite` is usually `nil`, so each command must `app.open(path)` itself; `Dialog()` returns nil; state does not persist across calls, so **every batch command must open → mutate → save**. One more, found during the M0 spike: **uncaught Lua errors print to stdout, not stderr**, with a non-zero exit code — read `stdout` first when building the error path, or the real traceback gets silently discarded.
 
 ### 3.5 Backend selection
 
@@ -1300,7 +1313,7 @@ Reasonable, and there's precedent for community tools getting linked from the do
 
 | Milestone | Deliverable | Done when |
 |---|---|---|
-| **M0** Spike | Working bridge prototype | 200 commands round-trip < 50ms, errors don't kill it |
+| **M0** Spike | Working bridge prototype | ✅ Batch bridge validated: 30/30 sequential round-trips, 0 failures, avg 55ms. Resident/Timer bridge found broken on the local dev build (see §15) — parked, not blocking. |
 | **M1** Skeleton | MCPServer + lifespan + discovery + 1 tool | `create_sprite` works from Claude |
 | **M2** Draw | `draw_grid`, `draw_shape`, `fill` | Can hand-write a recognizable sprite via tool calls |
 | **M3** Vision | `render_preview` + auto-preview | Model sees its own output and self-corrects |
@@ -1332,7 +1345,17 @@ Reasonable, and there's precedent for community tools getting linked from the do
 | Unbounded canvas size | Preview token costs explode | Cap at 1024, warn at 128 |
 | f-stringing values into Lua | Injection, syntax errors on quotes/newlines | Type-validate + `%q` escape |
 | Aseprite version drift | Tools break after user updates | Pin range, feature-detect, golden tests |
-| Cold-spawn per call | ~1s latency, state loss | Resident bridge, batch as fallback |
+| Cold-spawn per call | Assumed ~1s latency | Measured 55ms avg on batch (§1.2) — cheaper than the doc originally assumed; don't reach for resident just to chase this |
+| `Timer.ontick` inside a Dialog script | Never fires, or once alive throws `C stack overflow` on `app.fs.listFiles` every tick | Confirmed on Aseprite `1.3.18.1-8-g41252a501-dev` (M0 spike, 2026-08-10). Ship batch; don't debug Timer against a dev build — retest on a stable release before reviving resident |
+| Reading `stderr` for batch Lua errors | Error message empty/generic (`"no result marker in output"`), real traceback silently dropped | Aseprite writes uncaught Lua errors to **stdout**, not stderr, with a non-zero exit code — confirmed by direct probe. Read `stdout` first in the error path |
+| `app.sprite` nil in batch | `no_active_sprite` errors | Always `app.open()` explicitly |
+| In-place `cel.image` mutation | Edits bleed across linked cels | Clone → mutate → assign |
+| RGB-space quantization | Reference imports have wrong hues | Quantize in OKLab/CIELAB |
+| Floyd–Steinberg by default | Noisy, non-pixel-art references | Dithering off by default |
+| Undocumented `app.command` params | Silent no-ops | Test each wrapped command; read `gui.xml` |
+| Unbounded canvas size | Preview token costs explode | Cap at 1024, warn at 128 |
+| f-stringing values into Lua | Injection, syntax errors on quotes/newlines | Type-validate + `%q` escape |
+| Aseprite version drift | Tools break after user updates | Pin range, feature-detect, golden tests |
 | One tool per Lua call | Tool bloat, poor selection | `action` enums + `run_lua` escape hatch |
 | No preview on mutations | Model draws blind | Auto-preview helper on every mutating tool |
 | Returning an error dict | `is_error=False` — reads as success, model never retries | Raise `ToolError`; never return it |
