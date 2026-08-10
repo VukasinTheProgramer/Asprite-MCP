@@ -22,10 +22,14 @@ async def lifespan(server: MCPServer) -> AsyncIterator[SessionState]:
 
 mcp = MCPServer("aseprite", lifespan=lifespan)
 
+from . import prompts, resources  # noqa: E402
 from .tools import document, drawing, export, palette, reference, structure  # noqa: E402
 
 for module in (document, drawing, palette, structure, reference, export):
     module.register(mcp)
+
+prompts.register(mcp)
+resources.register(mcp)
 
 
 def main() -> None:
