@@ -107,6 +107,7 @@ These are the failure modes this project is known to hit. Each one cost someone 
 31. **Validate with `Annotated[int, Field(ge=1, le=1024)]`** where the SDK can do it — those errors already reach the model. Hand-rolled checks are for what `Field` can't express (grid row evenness, palette bounds, canvas overhang).
 32. Use `ctx.log(data=...)` and `ctx.report_progress()`. Not `print()`, not `message=` (that's the v1 signature).
 33. Mark tools with `annotations` — read-only for `get_sprite_info`/`get_region_as_grid`, destructive for anything overwriting pixels. Hints for the client, not security.
+34. **`@mcp.resource()` handlers get zero dependency injection — no `Context`, no `Resolve()`, ever.** Confirmed by direct test (M8): even a URI template variable whose name matches a function parameter exactly doesn't exempt an *additional* `Resolve()`-wrapped param — the server refuses to start. Any resource needing live session/bridge state (an active-sprite preview, anything not a pure function of its URI) can't be built as a resource at all in this SDK version — make it a tool instead. Don't spend time debugging "why won't my resource see the session"; it structurally can't.
 
 ---
 

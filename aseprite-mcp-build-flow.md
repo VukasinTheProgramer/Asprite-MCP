@@ -1109,7 +1109,10 @@ The silhouette-first ordering matters more than any other single instruction —
 ### 9.2 Resources
 
 - `aseprite://palettes` — all bundled presets with swatch previews
-- `aseprite://sprite/current` — live preview image of the working sprite
+- ~~`aseprite://sprite/current` — live preview image of the working sprite~~ **not implementable**:
+  confirmed in M8 that resources in this SDK get no dependency injection at all — no `Context`, no
+  `Resolve()` — so a resource needing session state to know what "current" means has no way to reach
+  it. `get_sprite_info` (a tool) is the live-state equivalent; use that instead.
 - `aseprite://guide/pixel-art` — the craft rules (below)
 - `aseprite://guide/lua-api` — a condensed API cheat sheet for `run_lua`
 
@@ -1378,7 +1381,7 @@ Reasonable, and there's precedent for community tools getting linked from the do
 | **M5** Structure | `layers`, `frames`, `tags` | ✅ Verified end to end: add/set/list/reorder/duplicate/merge_down on layers, add/duplicate/delete/set_duration on frames, add/rename/list on tags. Found `frame.frameNumber` is read-only and `app.command.MoveFrame` doesn't exist — dropped frame reorder rather than fake one. Found `app.command.MergeDownLayer()` silently no-ops on the bottom-most layer — guarded with a layer-count check. Found (and fixed, not just for M5) a latent `J.encode` bug: `%q` isn't valid JSON for multi-line strings |
 | **M6** Reference | `import_reference` | ✅ OKLab math pinned exactly against Björn Ottosson's own published reference values (white/black/red), not just "runs". End-to-end spatial fidelity verified: a real left-red/right-blue test image survives crop→downscale→quantize with the split intact. Path jail verified both directions (blocked by default, works with `allow_external_path=True`). One deliberate simplification: "reference" and "reference_quantized" hold the same quantized pixels — indexed sprites (our default/recommended mode) can't represent the true-color original the doc's two-layer design implies, so both layers serve as locked-baseline vs. editable-copy instead |
 | **M7** Export | `export` all three formats | ✅ PNG/GIF/spritesheet all verified: real readable files on disk, spritesheet JSON has the right frame count and layout matches `sheet_type`. Found two silent-failure modes in Aseprite's own CLI — a multi-frame sprite to a single PNG exits 0 with no file and no error; an out-of-range `--frame-range` exits 0 and silently exports the wrong frame instead. Both guarded: always check the output file exists regardless of exit code, and validate the frame count via the bridge before invoking the CLI at all |
-| **M8** Guidance | Prompts + resources | `/sprite-character` produces good output unprompted |
+| **M8** Guidance | Prompts + resources | ✅ All 5 prompts (`sprite-character` + the 4 "also worth shipping" ones) registered and verified to interpolate args correctly. 3 of 4 planned resources shipped (`guide/pixel-art`, `guide/lua-api`, `palettes`). `aseprite://sprite/current` dropped — not a scope cut, a real SDK constraint: resources get zero dependency injection, so a resource needing session state to know "current" cannot be built at all in this SDK version (see §15) |
 | **M9** Harden | Errors, validation, undo, limits | Fuzzing produces no crashes, only structured errors |
 | **M10** Ship | Packaging, README, `--doctor`, CI | `uvx aseprite-mcp` works on a clean machine |
 
@@ -1415,6 +1418,7 @@ Reasonable, and there's precedent for community tools getting linked from the do
 | `layer.isLocked = true` | Throws `Cannot set field isLocked` — read-only | Confirmed empirically (M6 spike, 2026-08-10). The writable property is `layer.isEditable = false` |
 | `--save-as out.png` on a multi-frame sprite, no `--frame-range` | Exits 0, no output, no error message — the file is simply never created | Aseprite's CLI silently refuses to flatten multiple frames into one PNG. Confirmed empirically (M7 spike, 2026-08-10). Always pass `--frame-range N,N` for PNG export, and check the output file actually exists afterward regardless — never trust exit code 0 alone |
 | `--frame-range` past the sprite's actual frame count | Exits 0, exports the last valid frame instead — no error, no warning, wrong result | Confirmed empirically (M7 spike, 2026-08-10): requesting frame 99 on a 1-frame sprite silently exported frame 1. Validate the frame count via the bridge before ever invoking the CLI |
+| Resource handler declaring `Context` or a `Resolve()`-wrapped param | `ValueError` at server startup: "Context injection for static resources is not supported" (or a URI/param mismatch even when a template variable's name matches) | Confirmed empirically (M8 spike, 2026-08-10): **MCP resources get zero dependency injection in this SDK** — no `Context`, no `Resolve()`, not even on a URI template whose variable name matches the function parameter exactly. A "current sprite" resource needing session state to know what "current" means cannot be built this way at all. Use a tool (`get_sprite_info`) for anything needing live server state; keep resources to pure functions of their URI (or no params) |
 | One tool per Lua call | Tool bloat, poor selection | `action` enums + `run_lua` escape hatch |
 | No preview on mutations | Model draws blind | Auto-preview helper on every mutating tool |
 | Returning an error dict | `is_error=False` — reads as success, model never retries | Raise `ToolError`; never return it |
