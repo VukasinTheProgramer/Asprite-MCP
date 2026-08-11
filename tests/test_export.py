@@ -59,11 +59,24 @@ async def test_export_spritesheet_writes_image_and_valid_json(workspace):
     assert len(meta["frames"]) == 2
 
 
-async def test_export_png_rejects_out_of_range_frame_before_silently_clamping(workspace):
-    """Regression: Aseprite's CLI silently clamps an out-of-range
-    --frame-range to whatever frames exist instead of erroring — exit 0, no
-    output, wrong result. Confirmed empirically (M7 finding). Must be
-    rejected before ever invoking the CLI."""
+async def test_export_png_frame_is_one_based(workspace):
+    """Regression: --frame-range is 0-based, `frame` is 1-based. Sending
+    frame,frame instead of frame-1,frame-1 exported the *next* frame — here
+    the empty frame 2 — as a fully blank PNG with exit 0."""
+    async with Client(mcp) as c:
+        await _make_two_frame_sprite(c)  # frame 1 painted red, frame 2 empty
+        out = await c.call_tool("export", {"format": "png", "frame": 1})
+        assert not out.is_error
+
+    # getbbox() is None only when every pixel is 0 — i.e. a fully blank export.
+    im = Image.open(workspace / "s.png").convert("RGBA")
+    assert im.getbbox() is not None, "frame 1 exported blank — off-by-one"
+
+
+async def test_export_png_rejects_out_of_range_frame(workspace):
+    """Regression: an out-of-range --frame-range exits 0 and writes a blank
+    PNG rather than erroring, so the file-exists check can't catch it. Must
+    be rejected before ever invoking the CLI."""
     async with Client(mcp) as c:
         await _make_two_frame_sprite(c)
         out = await c.call_tool("export", {"format": "png", "frame": 99})

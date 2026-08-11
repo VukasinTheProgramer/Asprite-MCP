@@ -69,10 +69,11 @@ def register(mcp: MCPServer) -> None:
 
         json_path = out_path.with_suffix(".json")
         if format == "png":
-            # Aseprite silently clamps an out-of-range --frame-range to
-            # whatever frames actually exist rather than erroring — verified
-            # empirically (M7 spike, 2026-08-10): requesting frame 99 on a
-            # 1-frame sprite exported frame 1 with exit 0, no warning.
+            # An out-of-range --frame-range does NOT error and does NOT clamp:
+            # Aseprite exits 0 and writes a fully blank PNG (the M7 spike saw
+            # exit 0 + a file on disk and wrongly concluded "clamped to frame
+            # 1"). So the range still has to be validated here — the exists()
+            # check below cannot catch it.
             frame_count = bridge.execute(
                 f"local spr = J.sprite({lua_str(sprite_path)})\nreturn {{ count = #spr.frames }}"
             )["count"]
@@ -82,7 +83,8 @@ def register(mcp: MCPServer) -> None:
                     message=f"frame={frame} but the sprite only has {frame_count} frame(s).",
                     hint=f"Use a frame between 1 and {frame_count}.",
                 )
-            cmd += ["--frame-range", f"{frame},{frame}", "--save-as", str(out_path)]
+            # --frame-range is 0-based; the tool's `frame` param is 1-based.
+            cmd += ["--frame-range", f"{frame - 1},{frame - 1}", "--save-as", str(out_path)]
         elif format == "gif":
             cmd += ["--save-as", str(out_path)]
         else:  # spritesheet
