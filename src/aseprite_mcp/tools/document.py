@@ -10,7 +10,7 @@ from ..errors import ToolError
 from ..history import push_snapshot
 from ..render import emit
 from ..state import SpriteHandle
-from ..validation import lua_str, safe_path
+from ..validation import hex_to_rgba, lua_str, safe_path
 
 _COLOR_MODE_LUA_TO_STR = """
 local __cm = "rgb"
@@ -54,19 +54,46 @@ def register(mcp: MCPServer) -> None:
         bridge: Bridge,
         session: Session,
         name: str,
-        width: Annotated[int, Field(ge=1, le=1024)],
-        height: Annotated[int, Field(ge=1, le=1024)],
+        width: Annotated[int, Field(ge=1, le=1024)] | None = None,
+        height: Annotated[int, Field(ge=1, le=1024)] | None = None,
+        asset_type: Literal["character", "item", "tile", "portrait", "vfx"] | None = None,
         color_mode: Literal["indexed", "rgb", "grayscale"] = "indexed",
         overwrite: bool = False,
         preview: bool = True,
     ) -> list[str | MCPImage]:
         """Create a new sprite and make it active.
 
+        With a style project active (see the `style` tool), pass `asset_type`
+        instead of dimensions — the project's canvas default and palette are
+        applied for you, which is what keeps a library visually consistent.
+        Without one, pass `width` and `height` explicitly.
+
         For character sprites, 16x16 / 32x32 / 48x48 are typical. Prefer indexed
         color mode — it produces much better pixel art than free RGB.
 
-        Example: create_sprite(name="knight", width=32, height=32, color_mode="indexed")
+        Example: create_sprite(name="knight", asset_type="character")
+        Example: create_sprite(name="knight", width=32, height=32)
         """
+        bible = session.active_style()
+        if width is None or height is None:
+            if bible is None or asset_type is None:
+                raise ToolError(
+                    code="sprite_size_unresolved",
+                    message="Sprite size was not given and could not be derived.",
+                    hint=(
+                        "Pass width and height, or pass asset_type with a style project "
+                        "active (style(action='set_active', project=...))."
+                    ),
+                    context={"active_project": session.active_project},
+                )
+            if asset_type not in bible.canvas_defaults:
+                raise ToolError(
+                    code="asset_type_not_in_style",
+                    message=f"Project {bible.project!r} has no canvas default for {asset_type!r}.",
+                    hint=f"Defined types: {sorted(bible.canvas_defaults)}. Or pass width/height.",
+                    context={"defined": sorted(bible.canvas_defaults)},
+                )
+            width, height = bible.canvas_defaults[asset_type]
         # BatchBridge.execute is a blocking call. The tool is a plain `def`
         # (not async) so the SDK runs it on a worker thread instead of stalling
         # the event loop (CLAUDE.md #29) — no await, no thread-pool wrapping needed.
@@ -91,6 +118,23 @@ def register(mcp: MCPServer) -> None:
         session.active = result["path"]
 
         summary = f"Created {name}.aseprite — {width}x{height} {color_mode}."
+        if bible is not None:
+            set_pal = ",".join(
+                "Color{{r={},g={},b={},a={}}}".format(*hex_to_rgba(c)) for c in bible.palette
+            )
+            bridge.execute(
+                f"local spr = J.sprite({lua_str(result['path'])})\n"
+                "J.tx(function()\n"
+                f"  local cols = {{{set_pal}}}\n"
+                "  local pal = Palette(#cols)\n"
+                "  for i = 1, #cols do pal:setColor(i - 1, cols[i]) end\n"
+                "  spr:setPalette(pal)\n"
+                "end)\n"
+                "J.save(spr)\n"
+                "return { ok = true }"
+            )
+            session.sprites[result["path"]].palette = list(bible.palette)
+            summary += f" On {bible.project!r} palette ({len(bible.palette)} colors)."
         if width > _WARN_DIM or height > _WARN_DIM:
             summary += f" Note: above {_WARN_DIM}x{_WARN_DIM}, pixel art gets hard to control."
         return emit(bridge, session.config.previews, result["path"], summary, preview)

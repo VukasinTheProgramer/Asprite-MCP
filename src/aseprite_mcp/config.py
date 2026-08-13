@@ -12,6 +12,7 @@ class Config:
     runtime: Path
     previews: Path
     logs: Path
+    styles: Path
 
 
 def load_config() -> Config:
@@ -22,7 +23,11 @@ def load_config() -> Config:
     runtime = root / "runtime"
     previews = root / "previews"
     logs = root / "logs"
-    for d in (workspace, runtime, previews, logs):
+    # Style bibles are authored content, not plumbing — same class of thing as
+    # the workspace, so they get the same override. Tests depend on it too:
+    # without one, every run writes projects into the developer's real home.
+    styles = Path(os.environ.get("ASEPRITE_MCP_STYLES", root / "styles")).expanduser()
+    for d in (workspace, runtime, previews, logs, styles):
         d.mkdir(parents=True, exist_ok=True)
     return Config(
         aseprite_exe=find_aseprite(),
@@ -30,4 +35,5 @@ def load_config() -> Config:
         runtime=runtime,
         previews=previews,
         logs=logs,
+        styles=styles,
     )

@@ -8,6 +8,7 @@ from ..errors import ToolError
 from ..history import push_snapshot
 from ..palettes import load_preset
 from ..render import preview_image, render_palette_swatch, render_preview
+from ..style import normalize_hex
 from ..validation import hex_to_rgba, lua_str
 
 _MAX_PALETTE = 256
@@ -134,6 +135,19 @@ def register(mcp: MCPServer) -> None:
             table_lines.append(f"| {i} | {c} | {display_names.get(i, '')} |")
 
         summary = f"Palette set: {len(final_colors)} colors.\n" + "\n".join(table_lines)
+        # A3: warn, never block. Going off-palette is legitimate (a one-off VFX
+        # sprite, an imported reference), but silent divergence is how a library
+        # drifts out of style one sprite at a time.
+        bible = session.active_style()
+        got = normalize_hex(final_colors)
+        if bible is not None and got != normalize_hex(bible.palette):
+            off = sorted(set(got) - set(normalize_hex(bible.palette)))
+            summary = (
+                f"WARNING: this palette differs from active project {bible.project!r}"
+                + (f" — {len(off)} colors are not in it: {off[:8]}" if off else " (same colors, different order)")
+                + ".\nIf that is deliberate, carry on; otherwise call style(action='get') "
+                "and use the project palette.\n\n" + summary
+            )
         blocks: list[str | MCPImage] = [summary, preview_image(render_palette_swatch(final_colors))]
         if preview:
             png, meta = render_preview(bridge, session.config.previews, path)
