@@ -63,31 +63,47 @@ def test_undo_still_works_after_the_cap_drops_the_oldest(tmp_path):
 
 
 def test_sweep_removes_a_dead_runs_history_but_not_a_live_one(tmp_path):
+    """Uses real processes rather than assumed pids. `1` is init on POSIX but
+    means nothing on Windows, and a hardcoded "surely dead" pid is a guess --
+    which is how the first version of this passed on POSIX while the liveness
+    probe was outright broken on Windows."""
     import os
+    import subprocess
+    import sys
 
     from aseprite_mcp.history import sweep_stale_history
 
     session = _session(tmp_path)
     root = session.config.runtime / "history"
+
     mine = root / str(os.getpid()) / "s"
     mine.mkdir(parents=True)
     (mine / "a.aseprite").write_bytes(b"keep")
 
-    # pid 1 is init: alive, and not ours -- must survive
-    live = root / "1" / "s"
-    live.mkdir(parents=True)
-    (live / "b.aseprite").write_bytes(b"keep")
+    # a real process, alive and not ours, for the whole assertion
+    other = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
+    # a real process that has definitely exited, so its pid is definitely dead
+    finished = subprocess.Popen([sys.executable, "-c", ""])
+    finished.wait()
 
-    dead = root / "999999" / "s"
-    dead.mkdir(parents=True)
-    (dead / "c.aseprite").write_bytes(b"drop")
+    try:
+        live = root / str(other.pid) / "s"
+        live.mkdir(parents=True)
+        (live / "b.aseprite").write_bytes(b"keep")
 
-    removed = sweep_stale_history(session.config)
+        dead = root / str(finished.pid) / "s"
+        dead.mkdir(parents=True)
+        (dead / "c.aseprite").write_bytes(b"drop")
 
-    assert removed == 1
-    assert (mine / "a.aseprite").exists(), "swept our own live history"
-    assert (live / "b.aseprite").exists(), "swept a concurrent server's history"
-    assert not dead.exists(), "left a dead run's history behind"
+        removed = sweep_stale_history(session.config)
+
+        assert removed == 1
+        assert (mine / "a.aseprite").exists(), "swept our own live history"
+        assert (live / "b.aseprite").exists(), "swept a concurrent server's history"
+        assert not dead.exists(), "left a dead run's history behind"
+    finally:
+        other.kill()
+        other.wait()
 
 
 def test_sweep_reclaims_the_pre_cap_layout(tmp_path):

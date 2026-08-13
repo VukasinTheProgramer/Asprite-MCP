@@ -7,6 +7,7 @@ sprite's on-disk state before each mutation, restore from the copy on undo.
 
 import os
 import shutil
+import sys
 import uuid
 from pathlib import Path
 
@@ -56,6 +57,13 @@ def push_snapshot(session: SessionState, path: str) -> None:
 
 
 def _alive(pid: int) -> bool:
+    """Does a process with this pid exist?
+
+    Errs toward True on anything ambiguous: a false "alive" keeps stale files a
+    while longer, a false "dead" deletes a running server's undo history.
+    """
+    if sys.platform == "win32":
+        return _alive_windows(pid)
     try:
         os.kill(pid, 0)
     except ProcessLookupError:
@@ -65,6 +73,35 @@ def _alive(pid: int) -> bool:
     except OSError:
         return True  # unknown -- err toward keeping the files
     return True
+
+
+def _alive_windows(pid: int) -> bool:
+    """os.kill is NOT a liveness probe on Windows.
+
+    CPython maps os.kill(pid, sig) to TerminateProcess(handle, sig) for any
+    signal that is not a console control event — so `os.kill(pid, 0)`, the POSIX
+    idiom for "does this exist", would terminate a live process with exit code 0.
+    For a pid that does not exist it raises a plain OSError rather than
+    ProcessLookupError, which the POSIX branch reads as "alive" and never sweeps.
+    That is how CI caught this: the dead-pid case returned 0 removals.
+
+    OpenProcess with a query-only right is the actual probe.
+    """
+    import ctypes
+    from ctypes import wintypes
+
+    PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+    ERROR_INVALID_PARAMETER = 87
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)  # type: ignore[attr-defined]
+    kernel32.OpenProcess.restype = wintypes.HANDLE
+    handle = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
+    if handle:
+        kernel32.CloseHandle(handle)
+        return True
+    # Only "no such pid" proves death. Access-denied means it exists and belongs
+    # to someone else, which is still alive.
+    return ctypes.get_last_error() != ERROR_INVALID_PARAMETER  # type: ignore[attr-defined]
 
 
 def sweep_stale_history(config: Config) -> int:
