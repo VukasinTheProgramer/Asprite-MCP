@@ -119,7 +119,10 @@ def _downscale_lanczos_png(rgba01: np.ndarray, max_dim: int = _MAX_DIM) -> bytes
 
 
 def register(mcp: MCPServer) -> None:
-    @mcp.tool(structured_output=False, annotations=ToolAnnotations(read_only_hint=True))
+    # No structured_output=False here: this returns data, not text, and carries
+    # no Image. Suppressing the schema also suppresses structured_content, so
+    # callers got None instead of the GridDetection (CLAUDE.md #26/#27).
+    @mcp.tool(annotations=ToolAnnotations(read_only_hint=True))
     def detect_grid(image_path: str, session: Session, allow_external_path: bool = False) -> GridDetection:
         """Detect whether an image sits on a real pixel grid (a clean upscale of
         pixel art) or not (a photo, a smooth render). `conform_image` calls this
