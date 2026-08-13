@@ -19,6 +19,7 @@ from ..deps import Bridge, Session
 from ..errors import ToolError
 from ..history import push_snapshot
 from ..palettes import load_preset
+from ..reference import remove_background as _remove_background
 from ..render import emit
 from ..validation import hex_to_rgba, lua_str, safe_path
 from .drawing import _canvas_info
@@ -52,8 +53,10 @@ def _resolve_image(session: Session, image_path: str, allow_external_path: bool)
     return src
 
 
-def _load_rgba01(src: Path) -> np.ndarray:
+def _load_rgba01(src: Path, remove_background: bool = False, bg_tolerance: int = 24) -> np.ndarray:
     im = Image.open(src).convert("RGBA")
+    if remove_background:
+        im = _remove_background(im, tolerance=bg_tolerance)
     return np.asarray(im, dtype=float) / 255.0
 
 
@@ -126,6 +129,7 @@ def register(mcp: MCPServer) -> None:
         dither: Literal["none", "bayer2x2", "bayer4x4"] = "none",
         auto_cleanup: bool = True,
         aggressiveness: float = 0.5,
+        remove_background: bool = False,
         sprite: str | None = None,
         import_to_sprite: bool = True,
         allow_external_path: bool = False,
@@ -149,6 +153,14 @@ def register(mcp: MCPServer) -> None:
         `import_to_sprite=False` to just inspect the conform result (returns a
         before/after comparison, nothing written) before committing to a sprite.
 
+        `remove_background=True` flood-fills transparency in from the four
+        corners before conforming (same technique as `import_reference`) —
+        turn it on for a screenshot or render sitting on a scene/background
+        rather than a clean or already-transparent subject. It only clears
+        regions connected to a corner, so a busy painted background (not a
+        flat or gradient one) will only be partially removed; crop tighter to
+        the subject first if it still dominates the result.
+
         Example — a 256x256 render of a clean 8x upscale, locked to pico8:
             conform_image(image_path="render.png", target_size=[32, 32], palette="pico8")
         """
@@ -165,7 +177,7 @@ def register(mcp: MCPServer) -> None:
             )
 
         src = _resolve_image(session, image_path, allow_external_path)
-        rgba = _load_rgba01(src)
+        rgba = _load_rgba01(src, remove_background)
 
         sprite_hex: list[str] | None = None
         path: str | None = None

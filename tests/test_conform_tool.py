@@ -3,8 +3,21 @@ from mcp.client import Client
 from PIL import Image
 
 from aseprite_mcp.server import mcp
+from aseprite_mcp.tools.conform_tool import _load_rgba01
 
-pytestmark = pytest.mark.asyncio
+
+def test_load_rgba01_remove_background_clears_corner_connected_pixels(tmp_path):
+    im = Image.new("RGBA", (10, 10), (255, 0, 0, 255))
+    im.putpixel((4, 4), (0, 255, 0, 255))  # not corner-connected -- stays opaque
+    path = tmp_path / "flat.png"
+    im.save(path)
+
+    off = _load_rgba01(path, remove_background=False)
+    on = _load_rgba01(path, remove_background=True)
+
+    assert off[..., 3].min() == 1.0  # untouched: fully opaque
+    assert on[0, 0, 3] == 0.0  # corner cleared
+    assert on[4, 4, 3] == 1.0  # isolated pixel of the same color survives
 
 
 @pytest.fixture
@@ -32,6 +45,7 @@ def _upscaled_checkerboard(workspace, cell: int = 8, cells: int = 4) -> str:
     return "checker.png"
 
 
+@pytest.mark.asyncio
 async def test_detect_grid_finds_upscale_factor(workspace):
     image_path = _upscaled_checkerboard(workspace, cell=8, cells=4)
     async with Client(mcp) as c:
@@ -43,6 +57,7 @@ async def test_detect_grid_finds_upscale_factor(workspace):
         assert info["is_pixel_art"] is True
 
 
+@pytest.mark.asyncio
 async def test_conform_image_without_sprite_returns_before_after(workspace):
     image_path = _upscaled_checkerboard(workspace, cell=8, cells=4)
     async with Client(mcp) as c:
@@ -62,6 +77,7 @@ async def test_conform_image_without_sprite_returns_before_after(workspace):
         assert len(images) == 2  # before + after
 
 
+@pytest.mark.asyncio
 async def test_conform_image_writes_into_matching_sprite(workspace, read_pixels):
     image_path = _upscaled_checkerboard(workspace, cell=8, cells=4)
     async with Client(mcp) as c:
@@ -83,6 +99,7 @@ async def test_conform_image_writes_into_matching_sprite(workspace, read_pixels)
     assert used <= {"0", "1"}  # only the two palette indices, nothing off-palette
 
 
+@pytest.mark.asyncio
 async def test_conform_image_rejects_canvas_size_mismatch(workspace):
     image_path = _upscaled_checkerboard(workspace, cell=8, cells=4)
     async with Client(mcp) as c:
@@ -94,6 +111,7 @@ async def test_conform_image_rejects_canvas_size_mismatch(workspace):
         assert "canvas_size_mismatch" in out.content[0].text
 
 
+@pytest.mark.asyncio
 async def test_conform_image_requires_palette_without_active_sprite(workspace):
     image_path = _upscaled_checkerboard(workspace, cell=8, cells=4)
     async with Client(mcp) as c:
