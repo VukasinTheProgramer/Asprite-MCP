@@ -1,4 +1,3 @@
-import datetime
 import json
 
 from mcp.server.mcpserver import Image as MCPImage
@@ -6,8 +5,12 @@ from mcp.server.mcpserver import MCPServer
 
 from ..deps import Bridge, Session
 from ..history import push_snapshot
+from ..logs import get_logger
 from ..render import emit
 from ..validation import lua_str
+
+
+_log = get_logger("run_lua")
 
 
 def register(mcp: MCPServer) -> None:
@@ -39,12 +42,11 @@ def register(mcp: MCPServer) -> None:
         """
         path = session.resolve_sprite(sprite)
 
-        session.config.logs.mkdir(parents=True, exist_ok=True)
-        log_path = session.config.logs / "run_lua.log"
-        with log_path.open("a") as f:
-            f.write(f"\n--- {datetime.datetime.now(datetime.UTC).isoformat()} sprite={path} ---\n")
-            f.write(script)
-            f.write("\n")
+        # Was a hand-rolled append to run_lua.log with no rotation, so it grew
+        # forever. Same requirement, now through the shared rotating logger.
+        _log.info("run_lua", extra={"context": {
+            "sprite": path, "timeout_s": timeout, "script": script[:4000]
+        }})
 
         push_snapshot(session, path)
         result = bridge.execute(

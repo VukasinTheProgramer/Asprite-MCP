@@ -6,6 +6,9 @@ from pathlib import Path
 from typing import Any
 
 from ..errors import AsepriteError, BridgeTimeout
+from ..logs import get_logger
+
+_log = get_logger("bridge.batch")
 
 PRELUDE = (Path(__file__).parent / "lua" / "prelude.lua").read_text()
 
@@ -59,6 +62,11 @@ class BatchBridge:
                     timeout=timeout,
                 )
             except subprocess.TimeoutExpired:
+                # The one failure a user cannot reproduce from the model's
+                # transcript: record the script that hung, not just that it did.
+                _log.error("command timed out", extra={"context": {
+                    "timeout_s": timeout, "lua": lua[:2000]
+                }})
                 raise BridgeTimeout(timeout) from None
 
             for line in r.stdout.splitlines():
@@ -69,8 +77,13 @@ class BatchBridge:
             # writes the Lua traceback to STDOUT, not stderr — confirmed by
             # direct probe (M0 spike). stderr is checked too in case that
             # changes in a future Aseprite version.
-            raise AsepriteError(
-                r.stdout.strip() or r.stderr.strip() or f"aseprite exited {r.returncode} with no output"
+            detail = (
+                r.stdout.strip() or r.stderr.strip()
+                or f"aseprite exited {r.returncode} with no output"
             )
+            _log.error("lua command failed", extra={"context": {
+                "returncode": r.returncode, "detail": detail[:2000], "lua": lua[:2000]
+            }})
+            raise AsepriteError(detail)
         finally:
             os.unlink(script)

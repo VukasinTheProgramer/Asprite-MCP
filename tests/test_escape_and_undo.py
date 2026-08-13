@@ -78,8 +78,17 @@ async def test_run_lua_logs_every_script(workspace):
             "run_lua",
             {"script": f"-- {marker}\nreturn {{ ok = true }}", "preview": False},
         )
-    log_path = Path("~/.aseprite-mcp/logs/run_lua.log").expanduser()
-    assert marker in log_path.read_text()
+    # run_lua used to hand-append to its own run_lua.log, which had no rotation
+    # and was the only thing in the project that logged at all. It now goes
+    # through the shared rotating logger as a JSON record.
+    import json
+
+    log_path = Path("~/.aseprite-mcp/logs/aseprite-mcp.log").expanduser()
+    records = [json.loads(line) for line in log_path.read_text().splitlines() if line.strip()]
+    mine = [r for r in records if marker in r.get("context", {}).get("script", "")]
+    assert mine, f"no run_lua record carrying {marker}"
+    assert mine[-1]["msg"] == "run_lua"
+    assert mine[-1]["context"]["sprite"].endswith("s.aseprite")
 
 
 async def test_undo_redo_full_cycle_matches_real_pixel_state(workspace, aseprite_exe):

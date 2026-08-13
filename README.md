@@ -123,6 +123,11 @@ bundle on macOS — the binary inside it, e.g.
 `/Applications/Aseprite.app/Contents/MacOS/aseprite`). Run `aseprite-mcp --doctor` to see exactly
 which paths were tried.
 
+**Anything failed and you need the detail afterwards** — `~/.aseprite-mcp/logs/aseprite-mcp.log`,
+one JSON object per line, rotated at 2 MB. Bridge failures record the Aseprite traceback and the Lua
+that caused it; timeouts record the script that hung; every `run_lua` script is logged. Nothing is
+ever written to stdout — that carries the MCP protocol.
+
 **A tool call times out** — the default per-command timeout is 10s (30s for exports), generous for
 normal use (measured average is under 100ms). A timeout usually means Aseprite itself hung on
 something unrelated to the command — check for a stray Aseprite process and kill it, then retry.
