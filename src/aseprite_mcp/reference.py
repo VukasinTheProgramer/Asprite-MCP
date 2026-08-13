@@ -6,46 +6,20 @@ touches Aseprite. See aseprite-mcp-build-flow.md §8.2 for the pipeline rational
 import numpy as np
 from PIL import Image, ImageOps
 
-from .validation import hex_to_rgba
+from .color import quantize_rgb, rgb_to_oklab
 
-# --- OKLab -----------------------------------------------------------------
-# Björn Ottosson's OKLab (https://bottosson.github.io/posts/oklab/). RGB
-# Euclidean distance picks visibly wrong hues for quantization (CLAUDE.md
-# #12) — OKLab is perceptually uniform, so nearest-neighbor in this space
-# tracks what a human would call "the closest color".
+# OKLab conversion lives in color.py (shared with the Phase B conform/cleanup
+# pipeline). RGB Euclidean distance picks visibly wrong hues for quantization
+# (CLAUDE.md #12) — OKLab is perceptually uniform, so nearest-neighbor in
+# this space tracks what a human would call "the closest color".
 
-
-def _srgb_to_linear(c: np.ndarray) -> np.ndarray:
-    return np.where(c <= 0.04045, c / 12.92, ((c + 0.055) / 1.055) ** 2.4)
-
-
-def rgb_array_to_oklab(arr: np.ndarray) -> np.ndarray:
-    """arr: (..., 3) float in [0,1], sRGB. Returns (..., 3) OKLab."""
-    lin = _srgb_to_linear(arr)
-    r, g, b = lin[..., 0], lin[..., 1], lin[..., 2]
-
-    ll = 0.4122214708 * r + 0.5363325363 * g + 0.0514459929 * b
-    mm = 0.2119034982 * r + 0.6806995451 * g + 0.1073969566 * b
-    ss = 0.0883024619 * r + 0.2817188376 * g + 0.6299787005 * b
-
-    ll_, mm_, ss_ = np.cbrt(ll), np.cbrt(mm), np.cbrt(ss)
-
-    ok_l = 0.2104542553 * ll_ + 0.7936177850 * mm_ - 0.0040720468 * ss_
-    ok_a = 1.9779984951 * ll_ - 2.4285922050 * mm_ + 0.4505937099 * ss_
-    ok_b = 0.0259040371 * ll_ + 0.7827717662 * mm_ - 0.8086757660 * ss_
-    return np.stack([ok_l, ok_a, ok_b], axis=-1)
+rgb_array_to_oklab = rgb_to_oklab  # back-compat alias for existing callers/tests
 
 
 def quantize_to_palette(im: Image.Image, palette_hex: list[str]) -> np.ndarray:
     """Nearest palette color per pixel in OKLab space. Returns (H, W) int
     array of palette indices."""
-    lab_pal = rgb_array_to_oklab(
-        np.array([hex_to_rgba(h)[:3] for h in palette_hex], dtype=float) / 255.0
-    )
-    arr = np.array(im.convert("RGB"), dtype=float) / 255.0
-    lab = rgb_array_to_oklab(arr)
-    d = ((lab[:, :, None, :] - lab_pal[None, None]) ** 2).sum(-1)
-    return d.argmin(-1)
+    return quantize_rgb(np.array(im.convert("RGB"), dtype=float) / 255.0, palette_hex)
 
 
 # --- Pipeline steps ----------------------------------------------------------
