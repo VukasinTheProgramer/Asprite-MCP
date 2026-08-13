@@ -386,46 +386,6 @@ def thin_lines(idx: np.ndarray, transparent: int = TRANSPARENT_INDEX) -> tuple[n
     return out, int((out != idx).sum())
 
 
-def remove_doubles(idx: np.ndarray) -> tuple[np.ndarray, int]:
-    """Collapse duplicated adjacent rows/columns left by grid misdetection.
-
-    When `detect_grid` picks a cell one pixel off, the resample emits the same
-    row twice; the sprite then reads as the right art at the wrong aspect. Only
-    fully-identical neighbours collapse, so deliberately flat art is untouched.
-    Returns a possibly *smaller* array — callers must handle the shape change.
-    """
-    rows = [0] + [y for y in range(1, idx.shape[0]) if not np.array_equal(idx[y], idx[y - 1])]
-    tmp = idx[rows]
-    cols = [0] + [x for x in range(1, tmp.shape[1]) if not np.array_equal(tmp[:, x], tmp[:, x - 1])]
-    out = tmp[:, cols]
-    return out, int(idx.size - out.size)
-
-
-def snap_grid(idx: np.ndarray, cell_w: int, cell_h: int, offset_x: int = 0, offset_y: int = 0) -> tuple[np.ndarray, int]:
-    """Force every detected grid cell to a single color — its own modal color.
-
-    Pairs with `grid.detect_grid`: once a cell size is known with confidence,
-    any within-cell variation is resample noise by definition, because the
-    source art had one color there.
-    """
-    if cell_w < 1 or cell_h < 1:
-        raise ToolError(
-            code="snap_grid_bad_cell",
-            message=f"cell_w={cell_w}, cell_h={cell_h} — both must be >= 1.",
-            hint="Take these from detect_grid, and only when is_pixel_art is true.",
-        )
-    out = idx.copy()
-    H, W = idx.shape
-    for y0 in range(-(offset_y % cell_h), H, cell_h):
-        for x0 in range(-(offset_x % cell_w), W, cell_w):
-            block = idx[max(0, y0) : y0 + cell_h, max(0, x0) : x0 + cell_w]
-            if block.size == 0:
-                continue
-            vals, counts = np.unique(block, return_counts=True)
-            out[max(0, y0) : y0 + cell_h, max(0, x0) : x0 + cell_w] = vals[counts.argmax()]
-    return out, int((out != idx).sum())
-
-
 # --- Pipeline ----------------------------------------------------------------
 
 
@@ -546,10 +506,3 @@ def run_pipeline(
                 )
 
     return out, report
-
-
-# `snap_grid` and `remove_doubles` are deliberately absent from OPERATIONS.
-# Both need information the pipeline doesn't have (a detected grid) or change
-# the array's shape, and the cleanup tool diffs input against output pixel for
-# pixel to build its edit list. They belong in the conform path, which resizes
-# anyway — see conform.py. Calling them directly is fine.

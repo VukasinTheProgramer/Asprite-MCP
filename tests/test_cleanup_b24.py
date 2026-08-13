@@ -1,18 +1,18 @@
-"""B2.4 operations added after the first cleanup pass: close_silhouette,
-thin_lines, remove_doubles, snap_grid."""
+"""B2.4 operations added after the first cleanup pass: close_silhouette and
+thin_lines.
+
+`snap_grid` and `remove_doubles` were implemented here too, for completeness
+against the plan's B2.4 table, and then never wired to anything -- no production
+caller, only these tests. `snap_grid` also duplicated `grid.snap_to_grid`, which
+IS in the conform path. That is the exact shape of the bug that had just been
+found in `import_reference`: a plausible second implementation sitting unwired,
+waiting to drift from the one that runs. Deleted rather than kept warm.
+"""
 
 import numpy as np
 import pytest
 
-from aseprite_mcp.cleanup import (
-    OPERATIONS,
-    close_silhouette,
-    remove_doubles,
-    run_pipeline,
-    snap_grid,
-    thin_lines,
-)
-from aseprite_mcp.errors import ToolError
+from aseprite_mcp.cleanup import OPERATIONS, close_silhouette, run_pipeline, thin_lines
 
 
 def test_close_silhouette_fills_a_pinhole_with_its_own_ring_colour():
@@ -84,38 +84,6 @@ def test_thin_lines_leaves_a_filled_region_alone():
     assert np.array_equal(out, idx)
 
 
-def test_remove_doubles_collapses_duplicated_rows_and_columns():
-    base = np.array([[1, 2], [3, 4]], dtype=np.int32)
-    doubled = np.repeat(np.repeat(base, 2, axis=0), 2, axis=1)
-    out, dropped = remove_doubles(doubled)
-    assert np.array_equal(out, base)
-    assert dropped == doubled.size - base.size
-
-
-def test_remove_doubles_keeps_deliberately_flat_art():
-    idx = np.array([[1, 1, 1], [1, 1, 1]], dtype=np.int32)
-    out, _ = remove_doubles(idx)
-    assert out.shape == (1, 1)  # genuinely one colour — collapsing is correct
-    idx2 = np.array([[1, 2, 3], [4, 5, 6]], dtype=np.int32)
-    out2, dropped2 = remove_doubles(idx2)
-    assert np.array_equal(out2, idx2) and dropped2 == 0
-
-
-def test_snap_grid_forces_each_cell_to_its_modal_colour():
-    idx = np.full((4, 4), 1, dtype=np.int32)
-    idx[0, 0] = 9  # one stray pixel inside the top-left 2x2 cell
-    out, changed = snap_grid(idx, cell_w=2, cell_h=2)
-    assert (out == 1).all()
-    assert changed == 1
-
-
-def test_snap_grid_rejects_a_zero_cell_with_a_usable_message():
-    with pytest.raises(ToolError) as e:
-        snap_grid(np.zeros((4, 4), dtype=np.int32), cell_w=0, cell_h=2)
-    assert e.value.code == "snap_grid_bad_cell"
-    assert "detect_grid" in str(e.value)
-
-
 def test_new_ops_are_reachable_from_the_pipeline_and_report_counts():
     assert "close_silhouette" in OPERATIONS and "thin_lines" in OPERATIONS
     idx = np.full((8, 8), 2, dtype=np.int32)
@@ -126,9 +94,8 @@ def test_new_ops_are_reachable_from_the_pipeline_and_report_counts():
 
 
 def test_pipeline_preserves_shape_for_every_listed_operation():
-    """The cleanup tool diffs input against output pixel for pixel, so any
-    operation in OPERATIONS must not resize — that is why remove_doubles and
-    snap_grid are excluded from it."""
+    """The cleanup tool diffs input against output pixel for pixel, so no
+    operation may resize."""
     rng = np.random.default_rng(0)
     idx = rng.integers(0, 4, size=(16, 16)).astype(np.int32)
     out, _ = run_pipeline(idx, ["#000000", "#ff0000", "#00ff00", "#0000ff"], list(OPERATIONS), 0.5)
