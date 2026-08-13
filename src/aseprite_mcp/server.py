@@ -25,6 +25,7 @@ mcp = MCPServer("aseprite", lifespan=lifespan)
 from . import prompts, resources  # noqa: E402
 from .tools import (  # noqa: E402
     cleanup_tool,
+    conform_tool,
     document,
     drawing,
     escape,
@@ -36,7 +37,8 @@ from .tools import (  # noqa: E402
 )
 
 for module in (
-    document, drawing, palette, structure, reference, export, escape, undo, cleanup_tool
+    document, drawing, palette, structure, reference, export, escape, undo,
+    cleanup_tool, conform_tool,
 ):
     module.register(mcp)
 
