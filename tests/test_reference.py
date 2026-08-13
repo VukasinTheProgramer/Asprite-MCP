@@ -1,13 +1,15 @@
 import numpy as np
 from PIL import Image
 
-from aseprite_mcp.reference import (
-    crop_to_content,
-    quantize_to_palette,
-    remove_background,
-    remove_orphan_pixels,
-    rgb_array_to_oklab,
-)
+from aseprite_mcp.color import quantize_rgb
+from aseprite_mcp.reference import remove_background, rgb_array_to_oklab
+
+# reference.py's crop_to_content / downscale / quantize_to_palette /
+# dither_indices / remove_orphan_pixels are gone: Phase B superseded every one
+# of them and the surviving copies let the two pipelines drift apart. Their
+# behaviour is covered by test_conform.py (cropping, downscale) and
+# test_cleanup.py (orphan removal) against the implementations that actually
+# run now.
 
 
 def test_oklab_matches_published_reference_values():
@@ -29,9 +31,10 @@ def test_oklab_matches_published_reference_values():
 
 def test_quantize_picks_the_closer_color_not_rgb_nearest():
     """A case where OKLab and RGB-Euclidean nearest-neighbor disagree would
-    be the real test, but even the trivial case must at least be right."""
-    im = Image.new("RGB", (1, 1), (200, 50, 50))
-    indices = quantize_to_palette(im, ["#ff0000", "#00ff00", "#0000ff"])
+    be the real test, but even the trivial case must at least be right.
+    Repointed at color.quantize_rgb, which is what runs now."""
+    arr = np.array([[[200, 50, 50]]], dtype=float) / 255.0
+    indices = quantize_rgb(arr, ["#ff0000", "#00ff00", "#0000ff"])
     assert indices[0, 0] == 0  # closest to red
 
 
@@ -45,31 +48,3 @@ def test_remove_background_clears_uniform_corners_not_the_subject():
     out_arr = np.array(out)
     assert out_arr[0, 0, 3] == 0  # corner became transparent
     assert out_arr[5, 5, 3] == 255  # subject untouched
-
-
-def test_crop_to_content_trims_transparent_margin():
-    arr = np.zeros((10, 10, 4), dtype=np.uint8)
-    arr[4:6, 4:6, 3] = 255  # 2x2 opaque square in the middle
-    im = Image.fromarray(arr, "RGBA")
-    cropped = crop_to_content(im)
-    assert cropped.size == (2, 2)
-
-
-def test_remove_orphan_pixels_fixes_isolated_speckle():
-    grid = np.array([
-        [0, 0, 0],
-        [0, 9, 0],  # single orphan pixel, all 4 neighbors are 0
-        [0, 0, 0],
-    ])
-    cleaned = remove_orphan_pixels(grid)
-    assert cleaned[1, 1] == 0
-
-
-def test_remove_orphan_pixels_leaves_real_edges_alone():
-    grid = np.array([
-        [1, 1, 0],
-        [1, 1, 0],  # a real 2x2 block, not an orphan
-        [0, 0, 0],
-    ])
-    cleaned = remove_orphan_pixels(grid)
-    assert (cleaned == grid).all()

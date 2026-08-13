@@ -1,11 +1,16 @@
 from pathlib import Path
 from typing import Literal
 
+import numpy as np
+
 from mcp.server.mcpserver import Image as MCPImage
 from mcp.server.mcpserver import MCPServer
 
 from .. import reference as pipeline
 from ..deps import Bridge, Session
+from ..cleanup import OPERATIONS, run_pipeline
+from ..color import TRANSPARENT_INDEX
+from ..conform import conform as run_conform
 from ..errors import ToolError
 from ..history import push_snapshot
 from ..render import emit
@@ -29,15 +34,25 @@ def register(mcp: MCPServer) -> None:
         allow_external_path: bool = False,
         preview: bool = True,
     ) -> list[str | MCPImage]:
-        """Import a reference image, downscale it to the sprite grid and
-        quantize it to the current palette (nearest color in OKLab, not raw
-        RGB — RGB-Euclidean picks visibly wrong hues). Creates two new
-        layers: 'reference' (locked, semi-transparent, look-but-don't-touch)
-        and 'reference_quantized' (a starting point to refine). Both hold the
-        same quantized pixels — indexed sprites can't represent true color,
-        so the "trace over the true-color original" idea from other tools'
-        design docs collapses to this for our indexed-first default; still
-        useful as a locked baseline vs. an editable copy.
+        """Import a reference as a pair of LAYERS to work against: 'reference'
+        (locked, semi-transparent, look-but-don't-touch) and
+        'reference_quantized' (an editable starting point).
+
+        **Prefer `conform_image` for turning a reference into a sprite.** It
+        writes conformed pixels straight into the cel and is the better tool
+        whenever you want the reference to *become* the sprite. Reach for this
+        one only when you specifically want the locked baseline layer to keep
+        comparing against while you redraw — that layer pair is the only thing
+        it does that `conform_image` does not.
+
+        Both layers hold the same quantized pixels: indexed sprites cannot
+        represent true colour, so "trace over the true-colour original"
+        collapses to this for our indexed-first default. Still useful as a
+        locked baseline versus an editable copy.
+
+        Pixels go through the same conform + cleanup pipeline `conform_image`
+        uses, so the two tools no longer disagree about what a downscale of the
+        same image looks like.
 
         `image_path` must be inside the workspace unless
         `allow_external_path=True` (CLAUDE.md #20 — reading outside the
@@ -73,13 +88,26 @@ def register(mcp: MCPServer) -> None:
         )
         palette_hex: list[str] = pal_result["hex"]
 
+        # Routed through conform.py rather than this module's own older
+        # downscale+quantize (upgrade-plan repo diff: "reference.py MOD route
+        # through conform.py"). The separate path had drifted badly: no grid
+        # detection, no modal downscale, no aspect fit, and -- because it never
+        # went through _resolve_palette -- it still reserved nothing at palette
+        # entry 0, so importing against pico8 erased 30% of a sprite's opaque
+        # pixels exactly as conform_image used to.
         im = pipeline.load_and_orient(str(src))
         if remove_background:
             im = pipeline.remove_background(im)
-        im = pipeline.crop_to_content(im)
-        im = pipeline.downscale(im, w, h)
-        indices = pipeline.dither_indices(im, palette_hex, dither)
-        indices = pipeline.remove_orphan_pixels(indices)
+        rgba = np.asarray(im.convert("RGBA"), dtype=float) / 255.0
+        # No reserve_transparent() here, unlike conform_image: this reads the
+        # sprite's OWN palette, whose entry 0 is already the transparent slot by
+        # convention, and this tool does not rewrite the palette. Prepending a
+        # second placeholder would shift every index onto a palette the sprite
+        # does not have. conform's reserve_index_0 keeps quantization off entry 0,
+        # which is the part that was actually missing.
+        indices, alpha_mask, _ = run_conform(rgba, (w, h), palette_hex, dither=dither)
+        indices = np.where(alpha_mask, indices, TRANSPARENT_INDEX).astype(np.int32)
+        indices, _ = run_pipeline(indices, palette_hex, list(OPERATIONS), 0.5)
 
         px = []
         for row in range(h):

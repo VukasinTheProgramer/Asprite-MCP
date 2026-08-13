@@ -102,3 +102,21 @@ async def test_import_reference_outside_workspace_allowed_with_opt_in(workspace,
             "import_reference", {"image_path": str(outside), "allow_external_path": True}
         )
         assert not out.is_error
+
+
+async def test_import_reference_does_not_erase_pixels_onto_index_0(workspace, split_image):
+    """import_reference had its own downscale+quantize path that never went
+    through _resolve_palette, so the index-0 fix that landed on conform_image
+    missed it entirely: importing against pico8 erased 30% of a sprite's opaque
+    pixels. Both tools now share conform.py, so they cannot diverge again."""
+    async with Client(mcp) as c:
+        await c.call_tool("create_sprite", {"name": "s", "width": 10, "height": 10})
+        await c.call_tool("set_palette", {"palette": ["#000000", "#c81e1e", "#1e1ec8"]})
+        out = await c.call_tool("import_reference", {"image_path": split_image})
+        assert not out.is_error
+
+        grid = out.content[0].text.split("\n", 1)[1]
+
+    # '.' is index 0 in the returned grid. The source image is fully opaque, so
+    # any of them means a pixel was quantized onto the transparent slot.
+    assert "." not in grid, f"pixels erased onto index 0:\n{grid}"
