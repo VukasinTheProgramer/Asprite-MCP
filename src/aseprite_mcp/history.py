@@ -92,16 +92,31 @@ def _alive_windows(pid: int) -> bool:
 
     PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
     ERROR_INVALID_PARAMETER = 87
+    STILL_ACTIVE = 259
 
     kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)  # type: ignore[attr-defined]
     kernel32.OpenProcess.restype = wintypes.HANDLE
     handle = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
-    if handle:
+    if not handle:
+        # Only "no such pid" proves death. Access-denied means it exists and
+        # belongs to someone else, which is still alive.
+        return ctypes.get_last_error() != ERROR_INVALID_PARAMETER  # type: ignore[attr-defined]
+
+    # A handle that opens is NOT proof of life. Windows keeps an exited
+    # process's pid resolvable for as long as any handle to it remains open --
+    # including the one a parent holds after the child died. CI hit exactly
+    # that: the "definitely dead" subprocess still opened, so nothing swept.
+    # GetExitCodeProcess is the actual liveness question.
+    try:
+        code = wintypes.DWORD()
+        ok = kernel32.GetExitCodeProcess(handle, ctypes.byref(code))
+    finally:
         kernel32.CloseHandle(handle)
-        return True
-    # Only "no such pid" proves death. Access-denied means it exists and belongs
-    # to someone else, which is still alive.
-    return ctypes.get_last_error() != ERROR_INVALID_PARAMETER  # type: ignore[attr-defined]
+    if not ok:
+        return True  # could not tell -- err toward keeping the files
+    # STILL_ACTIVE is ambiguous by design: a process that genuinely exits with
+    # 259 reads as running. That errs toward "alive", the safe direction here.
+    return code.value == STILL_ACTIVE
 
 
 def sweep_stale_history(config: Config) -> int:
