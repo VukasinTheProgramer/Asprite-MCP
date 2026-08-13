@@ -78,8 +78,10 @@ def register(mcp: MCPServer) -> None:
             ctor = "spr:newGroup()" if is_group else "spr:newLayer()"
             result = bridge.execute(
                 f"local spr = J.sprite({lua_str(path)})\n"
-                f"local l = {ctor}\n"
-                + (f"l.name = {lua_str(name)}\n" if name else "")
+                "local l = J.tx(function()\n"
+                f"  local __l = {ctor}\n"
+                + (f"  __l.name = {lua_str(name)}\n" if name else "")
+                + "  return __l\nend)\n"
                 + "J.save(spr)\nreturn { name = l.name }"
             )
             summary = f"Added layer '{result['name']}'."
@@ -90,7 +92,7 @@ def register(mcp: MCPServer) -> None:
             bridge.execute(
                 f"local spr = J.sprite({lua_str(path)})\n"
                 f"{_find_layer_lua(name)}\n"
-                "spr:deleteLayer(__target)\nJ.save(spr)\nreturn { ok = true }"
+                "J.tx(function() spr:deleteLayer(__target) end)\nJ.save(spr)\nreturn { ok = true }"
             )
             summary = f"Deleted layer '{name}'."
 
@@ -100,7 +102,7 @@ def register(mcp: MCPServer) -> None:
             bridge.execute(
                 f"local spr = J.sprite({lua_str(path)})\n"
                 f"{_find_layer_lua(name)}\n"
-                f"__target.name = {lua_str(new_name)}\nJ.save(spr)\nreturn {{ ok = true }}"
+                f"J.tx(function() __target.name = {lua_str(new_name)} end)\nJ.save(spr)\nreturn {{ ok = true }}"
             )
             summary = f"Renamed layer '{name}' to '{new_name}'."
 
@@ -110,7 +112,7 @@ def register(mcp: MCPServer) -> None:
             bridge.execute(
                 f"local spr = J.sprite({lua_str(path)})\n"
                 f"{_find_layer_lua(name)}\n"
-                f"__target.stackIndex = {index}\nJ.save(spr)\nreturn {{ ok = true }}"
+                f"J.tx(function() __target.stackIndex = {index} end)\nJ.save(spr)\nreturn {{ ok = true }}"
             )
             summary = f"Moved layer '{name}' to stack position {index}."
 
@@ -133,8 +135,9 @@ def register(mcp: MCPServer) -> None:
                 )
             bridge.execute(
                 f"local spr = J.sprite({lua_str(path)})\n"
-                f"{_find_layer_lua(name)}\n" + "\n".join(sets) + "\n"
-                "J.save(spr)\nreturn { ok = true }"
+                f"{_find_layer_lua(name)}\n"
+                + "J.tx(function()\n" + "\n".join(sets) + "\nend)\n"
+                + "J.save(spr)\nreturn { ok = true }"
             )
             summary = f"Updated layer '{name}'."
 
@@ -146,7 +149,7 @@ def register(mcp: MCPServer) -> None:
                 f"{_find_layer_lua(name)}\n"
                 "app.activeSprite = spr\napp.activeLayer = __target\n"
                 "local before = #spr.layers\n"
-                "app.command.DuplicateLayer()\n"
+                "J.tx(function() app.command.DuplicateLayer() end)\n"
                 "if #spr.layers == before then error('duplicate_failed: layer count unchanged') end\n"
                 "J.save(spr)\nreturn { count = #spr.layers }"
             )
@@ -160,7 +163,7 @@ def register(mcp: MCPServer) -> None:
                 f"{_find_layer_lua(name)}\n"
                 "app.activeSprite = spr\napp.activeLayer = __target\n"
                 "local before = #spr.layers\n"
-                "app.command.MergeDownLayer()\n"
+                "J.tx(function() app.command.MergeDownLayer() end)\n"
                 # app.command silently no-ops on invalid targets (e.g. the
                 # bottom-most layer has nothing below it) — verified
                 # empirically (M5 spike, 2026-08-10). Check it actually did
@@ -217,8 +220,10 @@ def register(mcp: MCPServer) -> None:
         if action == "add":
             result = bridge.execute(
                 f"local spr = J.sprite({lua_str(path)})\n"
-                "local f = spr:newEmptyFrame()\n"
-                + (f"f.duration = {duration}\n" if duration is not None else "")
+                "J.tx(function()\n"
+                "  local f = spr:newEmptyFrame()\n"
+                + (f"  f.duration = {duration}\n" if duration is not None else "")
+                + "end)\n"
                 + "J.save(spr)\nreturn { count = #spr.frames }"
             )
             summary = f"Added frame ({result['count']} frames total)."
@@ -228,7 +233,7 @@ def register(mcp: MCPServer) -> None:
             result = bridge.execute(
                 f"local spr = J.sprite({lua_str(path)})\n"
                 f"if not spr.frames[{index}] then error('frame_out_of_range: {index}') end\n"
-                f"spr:deleteFrame({index})\nJ.save(spr)\nreturn {{ count = #spr.frames }}"
+                f"J.tx(function() spr:deleteFrame({index}) end)\nJ.save(spr)\nreturn {{ count = #spr.frames }}"
             )
             summary = f"Deleted frame {index} ({result['count']} frames remain)."
 
@@ -237,8 +242,10 @@ def register(mcp: MCPServer) -> None:
             result = bridge.execute(
                 f"local spr = J.sprite({lua_str(path)})\n"
                 f"if not spr.frames[{index}] then error('frame_out_of_range: {index}') end\n"
-                f"local f = spr:newFrame({index})\n"
-                + (f"f.duration = {duration}\n" if duration is not None else "")
+                + "J.tx(function()\n"
+                f"  local f = spr:newFrame({index})\n"
+                + (f"  f.duration = {duration}\n" if duration is not None else "")
+                + "end)\n"
                 + "J.save(spr)\nreturn { count = #spr.frames }"
             )
             summary = f"Duplicated frame {index} ({result['count']} frames total)."
@@ -248,7 +255,7 @@ def register(mcp: MCPServer) -> None:
             bridge.execute(
                 f"local spr = J.sprite({lua_str(path)})\n"
                 f"if not spr.frames[{index}] then error('frame_out_of_range: {index}') end\n"
-                f"spr.frames[{index}].duration = {duration}\nJ.save(spr)\nreturn {{ ok = true }}"
+                f"J.tx(function() spr.frames[{index}].duration = {duration} end)\nJ.save(spr)\nreturn {{ ok = true }}"
             )
             summary = f"Frame {index} duration set to {duration}s."
 
@@ -311,9 +318,11 @@ def register(mcp: MCPServer) -> None:
                 f"local spr = J.sprite({lua_str(path)})\n"
                 f"if not spr.frames[{from_frame}] then error('frame_out_of_range: {from_frame}') end\n"
                 f"if not spr.frames[{to_frame}] then error('frame_out_of_range: {to_frame}') end\n"
-                f"local t = spr:newTag({from_frame}, {to_frame})\n"
-                f"t.name = {lua_str(name)}\n"
-                f"t.aniDir = {dir_lua}\n"
+                "J.tx(function()\n"
+                f"  local t = spr:newTag({from_frame}, {to_frame})\n"
+                f"  t.name = {lua_str(name)}\n"
+                f"  t.aniDir = {dir_lua}\n"
+                "end)\n"
                 "J.save(spr)\nreturn { ok = true }"
             )
             summary = f"Added tag '{name}' ({from_frame}-{to_frame})."
@@ -324,7 +333,7 @@ def register(mcp: MCPServer) -> None:
             bridge.execute(
                 f"local spr = J.sprite({lua_str(path)})\n"
                 f"{find_tag_lua()}\n"
-                "spr:deleteTag(__tag)\nJ.save(spr)\nreturn { ok = true }"
+                "J.tx(function() spr:deleteTag(__tag) end)\nJ.save(spr)\nreturn { ok = true }"
             )
             summary = f"Deleted tag '{name}'."
 
@@ -334,7 +343,7 @@ def register(mcp: MCPServer) -> None:
             bridge.execute(
                 f"local spr = J.sprite({lua_str(path)})\n"
                 f"{find_tag_lua()}\n"
-                f"__tag.name = {lua_str(new_name)}\nJ.save(spr)\nreturn {{ ok = true }}"
+                f"J.tx(function() __tag.name = {lua_str(new_name)} end)\nJ.save(spr)\nreturn {{ ok = true }}"
             )
             summary = f"Renamed tag '{name}' to '{new_name}'."
 
@@ -355,8 +364,9 @@ def register(mcp: MCPServer) -> None:
                 )
             bridge.execute(
                 f"local spr = J.sprite({lua_str(path)})\n"
-                f"{find_tag_lua()}\n" + "\n".join(sets) + "\n"
-                "J.save(spr)\nreturn { ok = true }"
+                f"{find_tag_lua()}\n"
+                + "J.tx(function()\n" + "\n".join(sets) + "\nend)\n"
+                + "J.save(spr)\nreturn { ok = true }"
             )
             summary = f"Updated tag '{name}'."
 

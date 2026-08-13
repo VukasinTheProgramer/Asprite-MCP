@@ -145,7 +145,9 @@ def register(mcp: MCPServer) -> None:
             push_snapshot(session, path)
             bridge.execute(
                 f"local spr = J.sprite({lua_str(path)})\n"
+                + "J.tx(function()\n"
                 + "\n".join(layer_lua_parts)
+                + "\nend)\n"
                 + "J.save(spr)\nreturn { ok = true }"
             )
 
