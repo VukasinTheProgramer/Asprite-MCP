@@ -5,6 +5,7 @@ from mcp.server import MCPServer
 
 from .bridge import make_bridge
 from .config import load_config
+from .history import sweep_stale_history
 from .state import SessionState
 from .style import available_projects
 
@@ -13,6 +14,10 @@ from .style import available_projects
 async def lifespan(server: MCPServer) -> AsyncIterator[SessionState]:
     """One Aseprite process per server run. Started once, stopped once."""
     state = SessionState(config=load_config())
+    # Undo stacks are in-memory, so any history left by a run that has exited is
+    # unreachable rather than merely old. Nothing reclaimed it before, which is
+    # why the directory reached 2,763 files in development.
+    sweep_stale_history(state.config)
     # A3: with exactly one project on disk there is nothing to choose, so choose
     # it. More than one is ambiguous — the model must call style(set_active).
     projects = available_projects(state.config.styles)
