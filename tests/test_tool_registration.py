@@ -61,3 +61,78 @@ async def test_the_known_text_only_list_has_not_gone_stale():
     or it silently starts exempting nothing while a real tool goes unchecked."""
     names = {t.name for t in await mcp.list_tools()}
     assert TEXT_OR_IMAGE_ONLY <= names, f"stale exemptions: {sorted(TEXT_OR_IMAGE_ONLY - names)}"
+
+
+# --- prompts ------------------------------------------------------------------
+# The v1 prompts named zero of the Phase A/B tools, so `style`, `conform_image`
+# and `cleanup` shipped and nothing pointed the model at them. Prompts are the
+# discovery surface; drift there makes features invisible rather than broken,
+# which is why no test caught it.
+
+async def test_prompts_point_at_the_tools_that_exist_now():
+    bodies = await _all_prompt_text()
+    for tool in ("style(", "cleanup(", "conform_image(", "draw_grid"):
+        assert any(tool in b for b in bodies.values()), f"no prompt mentions {tool}"
+
+
+async def test_every_prompt_anchors_on_the_style_project():
+    """A prompt that skips the style anchor re-derives a palette per sprite,
+    which is the drift Phase A exists to stop."""
+    bodies = await _all_prompt_text()
+    for name, body in bodies.items():
+        assert "style(" in body, f"{name} never mentions the style tool"
+
+
+async def test_no_prompt_uses_the_removed_create_sprite_signature():
+    """v1 prompts called create_sprite(size, size, indexed, palette=...).
+    create_sprite has never taken a palette, and now takes asset_type."""
+    bodies = await _all_prompt_text()
+    for name, body in bodies.items():
+        assert "indexed, palette=" not in body, f"{name} uses the v1 call shape"
+
+
+async def _all_prompt_text() -> dict[str, str]:
+    """Render every prompt with placeholder arguments and return its text."""
+    out: dict[str, str] = {}
+    for p in await mcp.list_prompts():
+        args = {}
+        for a in p.arguments or []:
+            args[a.name] = "2" if a.name in ("size", "tile_size", "frames") else "x"
+        result = await mcp.get_prompt(p.name, args)
+        out[p.name] = "\n".join(
+            m.content.text for m in result.messages if getattr(m.content, "type", None) == "text"
+        )
+    return out
+
+
+# --- docs ---------------------------------------------------------------------
+
+async def test_readme_documents_every_registered_tool_and_no_ghosts():
+    """The README listed only the v1 tools: `style`, `conform_image`, `cleanup`
+    and `detect_grid` shipped undocumented. Anyone installing got docs for a
+    strictly smaller product than they had."""
+    import re
+    from pathlib import Path
+
+    readme = (Path(__file__).parent.parent / "README.md").read_text()
+    table = re.findall(r"^\| `([a-z_]+)`", readme, re.M)
+    documented = set(table)
+    registered = {t.name for t in await mcp.list_tools()}
+    # undo/redo share one row, and get_ramp/get_region_as_grid are listed inline
+    registered -= {"redo"}
+
+    missing = registered - documented
+    assert not missing, f"registered but undocumented: {sorted(missing)}"
+
+    ghosts = documented - registered - {"undo", "style-setup"}
+    assert not ghosts, f"documented but not registered: {sorted(ghosts)}"
+
+
+async def test_readme_documents_every_prompt():
+    import re
+    from pathlib import Path
+
+    readme = (Path(__file__).parent.parent / "README.md").read_text()
+    documented = set(re.findall(r"`([a-z-]+)`", readme))
+    for p in await mcp.list_prompts():
+        assert p.name in documented, f"prompt {p.name} is undocumented"

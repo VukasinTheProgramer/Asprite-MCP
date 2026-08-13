@@ -29,7 +29,8 @@ Add to your MCP client config (e.g. Claude Desktop's `claude_desktop_config.json
       "args": ["aseprite-mcp"],
       "env": {
         "ASEPRITE_PATH": "/Applications/Aseprite.app/Contents/MacOS/aseprite",
-        "ASEPRITE_MCP_WORKSPACE": "~/pixel-art"
+        "ASEPRITE_MCP_WORKSPACE": "~/pixel-art",
+        "ASEPRITE_MCP_STYLES": "~/pixel-art/styles"
       }
     }
   }
@@ -40,16 +41,40 @@ Add to your MCP client config (e.g. Claude Desktop's `claude_desktop_config.json
 [discovery.py](src/aseprite_mcp/discovery.py)) and only needs it if your install is somewhere
 unusual. `ASEPRITE_MCP_WORKSPACE` defaults to `~/.aseprite-mcp/workspace`; every sprite path a tool
 call uses is relative to it (a jailed directory, not an arbitrary filesystem path).
+`ASEPRITE_MCP_STYLES` defaults to `~/.aseprite-mcp/styles` and holds the style bibles.
 
-Then, from your MCP client: *"Create a 32x32 knight sprite using the PICO-8 palette."* The
-`sprite-character` prompt (below) walks the model through a silhouette-first workflow that produces
-noticeably better results than an unguided request.
+Then, from your MCP client: *"Set up a style project on db16, then make me a 32x32 knight."*
+
+Start with the `style-setup` prompt, then `sprite-character`. Anchoring on a style project first is
+what keeps a whole asset set on one palette and one light direction — without it the model re-picks
+both on every sprite and the library drifts.
+
+## Style projects
+
+A **style bible** is a project's visual language stored on disk: palette, hue-clustered shading
+ramps, light direction, outline treatment, and a default canvas size per asset type.
+
+```
+style(action="create", project="dungeon", palette="db16")
+create_sprite(name="knight", asset_type="character")   # size + palette come from the project
+conform_image(image_path="ref.png", target_size=[32, 32])   # locked to the project palette
+```
+
+With a project active you stop passing dimensions and palettes per call. `set_palette` warns (never
+blocks) when a sprite diverges from the project, so going off-palette stays possible but never
+silent.
+
+Bibles live under `~/.aseprite-mcp/styles/` — override with `ASEPRITE_MCP_STYLES`.
+
+> Palette entry 0 is always reserved for transparency: Aseprite renders it transparent whatever
+> color sits there, so any palette you supply is shifted up by one to make room.
 
 ## Tools
 
 | Tool | What it does |
 |---|---|
-| `create_sprite` | New sprite, indexed/rgb/grayscale, becomes the active sprite |
+| `style` | Create/get/update/list style projects, set the active one |
+| `create_sprite` | New sprite; takes canvas size + palette from the active project via `asset_type` |
 | `get_sprite_info` | Live dimensions, color mode, layers, frames, palette size, tags |
 | `draw_grid` | Draw a block of pixels from a text grid (palette-index characters) |
 | `draw_shape` | Line/rect/ellipse/polyline/point, with mirroring |
@@ -60,6 +85,9 @@ noticeably better results than an unguided request.
 | `layers` | Add/delete/rename/reorder/set/duplicate/merge_down/list |
 | `frames` | Add/delete/duplicate/set_duration/list |
 | `tags` | Add/delete/rename/set/list (named frame ranges) |
+| `conform_image` | **Any image → true, grid-correct, palette-locked pixel art.** Grid detection, two-stage downscale, OKLab quantize, auto-repair |
+| `detect_grid` | Whether an image sits on a real pixel grid, and its cell size |
+| `cleanup` | Deterministic repair: AA fringes, orphan pixels, jaggies, near-duplicate colors |
 | `import_reference` | Photo → cropped, downscaled, OKLab-quantized starting point |
 | `export` | PNG (single frame), GIF (animation), or spritesheet + JSON |
 | `run_lua` | Arbitrary Lua for anything the above doesn't cover — sandboxed, logged |
@@ -70,9 +98,17 @@ consequence of each action without a separate "show me" step.
 
 ## Prompts
 
-`sprite-character`, `sprite-tileset`, `animate-walkcycle`, `from-reference`, `palette-explore` — each
-a concrete, checkpointed tool-call sequence rather than open-ended instructions. Invoke as a slash
-command or prompt template in your MCP client.
+Each is a concrete, checkpointed tool-call sequence rather than open-ended instructions. Invoke as a
+slash command or prompt template in your MCP client.
+
+| Prompt | When |
+|---|---|
+| `style-setup` | **First.** Establishes the palette, ramps and canvas defaults everything else inherits |
+| `sprite-character` | Draw a character silhouette-first on the project's style |
+| `sprite-from-reference` | Convert a reference image via `conform_image`, then refine by hand |
+| `sprite-tileset` | A seamlessly-tiling terrain or material tile |
+| `animate-walkcycle` | A looping walk cycle, transformed from one key pose |
+| `palette-explore` | Compare palette candidates, then commit the winner as a project |
 
 ## Resources
 

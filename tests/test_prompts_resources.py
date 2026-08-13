@@ -13,26 +13,40 @@ def workspace(tmp_path, monkeypatch, aseprite_exe):
     return tmp_path
 
 
-async def test_all_five_prompts_are_registered(workspace):
+async def test_the_prompt_set_is_registered(workspace):
+    """Rewritten for the hybrid flow: `from-reference` became
+    `sprite-from-reference` (it routes through conform_image now), and
+    `style-setup` was added as the anchor every other prompt assumes."""
     async with Client(mcp) as c:
         prompts = await c.list_prompts()
         names = {p.name for p in prompts.prompts}
         assert names == {
-            "sprite-character", "sprite-tileset", "animate-walkcycle",
-            "from-reference", "palette-explore",
+            "style-setup", "sprite-character", "sprite-from-reference",
+            "sprite-tileset", "animate-walkcycle", "palette-explore",
         }
 
 
 async def test_sprite_character_prompt_interpolates_args(workspace):
     async with Client(mcp) as c:
         got = await c.get_prompt(
-            "sprite-character", {"size": "32", "description": "a knight", "palette": "pico8"}
+            "sprite-character", {"name": "knight", "description": "a knight", "size": "32"}
         )
         text = got.messages[0].content.text
         assert "32x32" in text
         assert "a knight" in text
-        assert "palette=pico8" in text
         assert "silhouette" in text.lower()
+        # the palette is no longer a prompt argument -- it comes from the project
+        assert "style(" in text
+
+
+async def test_from_reference_prompt_routes_through_conform(workspace):
+    async with Client(mcp) as c:
+        got = await c.get_prompt(
+            "sprite-from-reference", {"image_path": "ref.png", "name": "k", "size": "32"}
+        )
+        text = got.messages[0].content.text
+        assert "conform_image(" in text and "detect_grid(" in text
+        assert "ref.png" in text
 
 
 async def test_three_resources_are_registered(workspace):
