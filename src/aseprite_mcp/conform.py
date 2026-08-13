@@ -14,12 +14,14 @@ from .color import BAYER, quantize_rgb
 from .grid import GridInfo, detect_grid, snap_to_grid
 
 Dither = Literal["none", "bayer2x2", "bayer4x4"]
+Fit = Literal["contain", "stretch"]
 
 
 class ConformReport(TypedDict):
     grid: GridInfo
     crop_box: tuple[int, int, int, int]
     target_size: tuple[int, int]
+    fitted_size: tuple[int, int]
     dither: str
 
 
@@ -112,6 +114,14 @@ def apply_bayer(rgb: np.ndarray, palette_hex: list[str], pattern: Dither, lightn
     return quantize_rgb(nudged, palette_hex, weights=(lightness_weight, 1.0, 1.0))
 
 
+def fit_size(src_w: int, src_h: int, tw: int, th: int) -> tuple[int, int]:
+    """Largest (w,h) fitting inside (tw,th) that keeps the source's aspect."""
+    if src_w <= 0 or src_h <= 0:
+        return max(tw, 1), max(th, 1)
+    s = min(tw / src_w, th / src_h)
+    return max(1, min(tw, round(src_w * s))), max(1, min(th, round(src_h * s)))
+
+
 def conform(
     rgba: np.ndarray,
     target_size: tuple[int, int],
@@ -119,10 +129,18 @@ def conform(
     grid: GridInfo | None = None,
     dither: Dither = "none",
     lightness_weight: float = 1.3,
+    fit: Fit = "contain",
 ) -> tuple[np.ndarray, np.ndarray, ConformReport]:
     """rgba (H,W,4) float [0,1] -> (palette indices (th,tw), alpha mask (th,tw)
     bool, report). `target_size` is (w, h). `grid` skips auto-detection when
     the caller already knows the source's pixel-block size.
+
+    `fit="contain"` (default) keeps the source's aspect ratio and centres the
+    result, leaving the rest of the canvas transparent — filling the canvas is
+    not the goal, preserving the subject is. `fit="stretch"` is the old
+    behaviour: it distorts anything whose aspect doesn't already match the
+    target. A 183x275 portrait forced into 64x64 comes out stretched 1.5x wide,
+    which is what happened to the person image in the B6 gate.
     """
     tw, th = target_size
     rgb, alpha = split_alpha(rgba)
@@ -133,22 +151,34 @@ def conform(
         rgb = snap_to_grid(rgb, g)
 
     h, w = rgb.shape[:2]
-    mid_w, mid_h = max(tw * 2, 1), max(th * 2, 1)
+    fw, fh = (tw, th) if fit == "stretch" else fit_size(w, h, tw, th)
+
+    mid_w, mid_h = max(fw * 2, 1), max(fh * 2, 1)
     if w > mid_w and h > mid_h:
         rgb = resize_lanczos(rgb, (mid_w, mid_h))
-    rgb = downscale_modal(rgb, (tw, th))
+    rgb = downscale_modal(rgb, (fw, fh))
 
     if dither == "none":
-        idx = enforce_palette(rgb, palette_hex, lightness_weight)
+        idx_small = enforce_palette(rgb, palette_hex, lightness_weight)
     else:
-        idx = apply_bayer(rgb, palette_hex, dither, lightness_weight)
+        idx_small = apply_bayer(rgb, palette_hex, dither, lightness_weight)
+    alpha_small = resize_nearest(alpha, (fw, fh)) > 0.5
 
-    alpha_mask = resize_nearest(alpha, (tw, th)) > 0.5
+    if (fw, fh) == (tw, th):
+        idx, alpha_mask = idx_small, alpha_small
+    else:
+        # centre the fitted art on the full canvas; the margin stays transparent
+        ox, oy = (tw - fw) // 2, (th - fh) // 2
+        idx = np.zeros((th, tw), dtype=idx_small.dtype)
+        alpha_mask = np.zeros((th, tw), dtype=bool)
+        idx[oy:oy + fh, ox:ox + fw] = idx_small
+        alpha_mask[oy:oy + fh, ox:ox + fw] = alpha_small
 
     report: ConformReport = {
         "grid": g,
         "crop_box": crop_box,
         "target_size": (tw, th),
+        "fitted_size": (fw, fh),
         "dither": dither,
     }
     return idx, alpha_mask, report

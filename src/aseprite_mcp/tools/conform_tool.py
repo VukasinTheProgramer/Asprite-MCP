@@ -146,6 +146,7 @@ def register(mcp: MCPServer) -> None:
         palette: str | list[str] | None = None,
         palette_size: Annotated[int, Field(ge=2, le=256)] = 16,
         dither: Literal["none", "bayer2x2", "bayer4x4"] = "none",
+        fit: Literal["contain", "stretch"] = "contain",
         auto_cleanup: bool = True,
         aggressiveness: float = 0.5,
         remove_background: bool = False,
@@ -178,6 +179,12 @@ def register(mcp: MCPServer) -> None:
         whose canvas equals `target_size` — call `create_sprite` first. Pass
         `import_to_sprite=False` to just inspect the conform result (returns a
         before/after comparison, nothing written) before committing to a sprite.
+
+        `fit="contain"` (default) keeps the source's aspect ratio and centres the
+        result, leaving the rest of the canvas transparent. Filling the canvas
+        is not the goal — a portrait forced into a square comes out visibly
+        stretched. Pass `fit="stretch"` only when you actually want the subject
+        distorted to fill the target.
 
         `remove_background=True` flood-fills transparency in from the four
         corners before conforming (same technique as `import_reference`) —
@@ -232,7 +239,7 @@ def register(mcp: MCPServer) -> None:
 
         palette_hex = _resolve_palette(palette, sprite_hex, rgba, palette_size)
 
-        idx, alpha_mask, report = run_conform(rgba, (tw, th), palette_hex, dither=dither)
+        idx, alpha_mask, report = run_conform(rgba, (tw, th), palette_hex, dither=dither, fit=fit)
         # Index 0 is always transparent in Aseprite regardless of its color
         # (drawing.py's get_region_as_grid documents the same rule) -- force it
         # everywhere conform's alpha threshold says the pixel isn't there.
@@ -244,6 +251,8 @@ def register(mcp: MCPServer) -> None:
 
         summary_lines = [
             f"Conformed {image_path} -> {tw}x{th}, {len(palette_hex)}-color palette.",
+            f"Fitted to {report['fitted_size'][0]}x{report['fitted_size'][1]} "
+            f"({'aspect preserved' if fit == 'contain' else 'stretched to fill'}).",
             f"Source grid: cell={report['grid']['cell_w']}x{report['grid']['cell_h']} "
             f"confidence={report['grid']['confidence']:.2f} "
             f"({'snapped' if report['grid']['is_pixel_art'] else 'ratio downscale'}).",
