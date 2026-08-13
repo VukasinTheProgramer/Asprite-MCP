@@ -326,13 +326,21 @@ def thin_lines(idx: np.ndarray, transparent: int = 0) -> tuple[np.ndarray, int]:
                 for start, end in _spans(on):
                     if end - start != 2:
                         continue
-                    # drop the far pixel — bottom of a horizontal line, right of
-                    # a vertical one, i.e. the side an upper-left light hides
+                    # Drop the far pixel — bottom of a horizontal line, right of
+                    # a vertical one, i.e. the side an upper-left light hides.
+                    # It takes whatever sits just beyond the run, NOT
+                    # transparency: a line through the interior of a shape must
+                    # thin into its neighbour, not punch a hole. Writing
+                    # `transparent` here speckled 1297px of holes across a photo
+                    # in the B6 gate.
                     drop = end - 1
+                    beyond = end
                     if horizontal:
-                        out[drop, line_no] = transparent
+                        fill = idx[beyond, line_no] if beyond < idx.shape[0] else transparent
+                        out[drop, line_no] = fill if fill != color else transparent
                     else:
-                        out[line_no, drop] = transparent
+                        fill = idx[line_no, beyond] if beyond < idx.shape[1] else transparent
+                        out[line_no, drop] = fill if fill != color else transparent
     return out, int((out != idx).sum())
 
 

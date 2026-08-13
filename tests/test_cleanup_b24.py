@@ -109,3 +109,14 @@ def test_pipeline_preserves_shape_for_every_listed_operation():
     idx = rng.integers(0, 4, size=(16, 16)).astype(np.int32)
     out, _ = run_pipeline(idx, ["#000000", "#ff0000", "#00ff00", "#0000ff"], list(OPERATIONS), 0.5)
     assert out.shape == idx.shape
+
+
+def test_thin_lines_never_punches_holes_in_the_interior_of_a_shape():
+    """The dropped pixel takes its neighbour's colour, not transparency. Setting
+    it transparent speckled 1297px of holes across a photo in the B6 gate --
+    thinning a line inside a filled region must not make the region see-through."""
+    idx = np.full((12, 12), 5, dtype=np.int32)   # solid opaque field
+    idx[5:7, 2:10] = 4                            # a 2px line drawn across it
+    out, changed = thin_lines(idx)
+    assert changed > 0, "the line should still thin"
+    assert (out != 0).all(), "no pixel may become transparent"
