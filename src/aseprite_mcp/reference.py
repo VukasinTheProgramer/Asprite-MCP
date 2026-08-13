@@ -6,7 +6,7 @@ touches Aseprite. See aseprite-mcp-build-flow.md §8.2 for the pipeline rational
 import numpy as np
 from PIL import Image, ImageOps
 
-from .color import quantize_rgb, rgb_to_oklab
+from .color import BAYER, quantize_rgb, rgb_to_oklab
 
 # OKLab conversion lives in color.py (shared with the Phase B conform/cleanup
 # pipeline). RGB Euclidean distance picks visibly wrong hues for quantization
@@ -77,20 +77,12 @@ def downscale(im: Image.Image, target_w: int, target_h: int) -> Image.Image:
     return im.resize((target_w, target_h), Image.Resampling.NEAREST)
 
 
-_BAYER = {
-    "bayer2x2": np.array([[0, 2], [3, 1]]) / 4.0,
-    "bayer4x4": np.array([
-        [0, 8, 2, 10], [12, 4, 14, 6], [3, 11, 1, 9], [15, 7, 13, 5],
-    ]) / 16.0,
-}
-
-
 def dither_indices(im: Image.Image, palette_hex: list[str], pattern: str) -> np.ndarray:
     """Ordered (Bayer) dithering. Floyd-Steinberg is default-off and not
     offered — it's noise at 32x32, wrong for pixel art (CLAUDE.md #14)."""
     if pattern == "none":
         return quantize_to_palette(im, palette_hex)
-    matrix = _BAYER[pattern]
+    matrix = BAYER[pattern]
     h, w = im.height, im.width
     threshold = np.tile(matrix, (h // matrix.shape[0] + 1, w // matrix.shape[1] + 1))[:h, :w]
     arr = np.array(im.convert("RGB"), dtype=float) / 255.0

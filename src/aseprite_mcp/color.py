@@ -80,6 +80,14 @@ def palette_lab(palette_hex: list[str]) -> np.ndarray:
     )
 
 
+BAYER = {
+    "bayer2x2": np.array([[0, 2], [3, 1]]) / 4.0,
+    "bayer4x4": np.array([
+        [0, 8, 2, 10], [12, 4, 14, 6], [3, 11, 1, 9], [15, 7, 13, 5],
+    ]) / 16.0,
+}
+
+
 def quantize_rgb(
     rgb: np.ndarray,
     palette_hex: list[str],
