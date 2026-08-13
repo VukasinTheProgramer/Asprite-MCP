@@ -25,6 +25,30 @@ _M1_INV = np.linalg.inv(_M1)
 _M2_INV = np.linalg.inv(_M2)
 
 
+# Aseprite renders palette entry 0 as transparent whatever color sits there,
+# so it is a reserved slot, never art. This was restated as prose in six files
+# and hardcoded as a bare `0` in ten more; every module that re-derived it was
+# one oversight away from a bug, and four separate defects came from exactly
+# that (B6 gate, 2026-08-13) — the worst erased 36% of a sprite. One name, so
+# forgetting it is a compile-time-visible mistake rather than a silent one.
+TRANSPARENT_INDEX = 0
+
+# What extract_palette parks in the reserved slot: far enough from plausible
+# art that a stray index-0 pixel is visibly wrong rather than quietly plausible.
+TRANSPARENT_PLACEHOLDER = "#ff00ff"
+
+
+def reserve_transparent(colors: list[str]) -> list[str]:
+    """Guarantee entry 0 is the reserved slot, shifting art up if it isn't.
+
+    Use on any palette about to be written to a sprite. Idempotent, so calling
+    it on an already-reserved palette is safe.
+    """
+    if colors and colors[0] == TRANSPARENT_PLACEHOLDER:
+        return list(colors)
+    return [TRANSPARENT_PLACEHOLDER, *colors]
+
+
 def srgb_to_linear(c: np.ndarray) -> np.ndarray:
     return np.where(c <= 0.04045, c / 12.92, ((c + 0.055) / 1.055) ** 2.4)
 
@@ -122,7 +146,7 @@ def extract_palette(
             pixels = pixels[visible]
     # A placeholder distinct from anything the art is likely to use, so a stray
     # index-0 pixel is visibly wrong rather than silently plausible.
-    slot0 = ["#ff00ff"] if reserve_index_0 else []
+    slot0 = [TRANSPARENT_PLACEHOLDER] if reserve_index_0 else []
     want = n_colors - len(slot0)
     if pixels.size == 0 or want < 1:
         return slot0 + ["#000000"]

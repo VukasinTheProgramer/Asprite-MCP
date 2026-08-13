@@ -7,13 +7,13 @@ import numpy as np
 from scipy import ndimage
 from skimage.measure import label
 
-from .color import oklab_to_rgb, palette_lab, quantize_rgb, rgb_to_oklab
+from .color import TRANSPARENT_INDEX, oklab_to_rgb, palette_lab, quantize_rgb, rgb_to_oklab
 from .errors import ToolError
 from .validation import hex_to_rgba
 
 
 def remove_orphans(
-    idx: np.ndarray, min_size: int = 2, protect: frozenset[int] = frozenset({0})
+    idx: np.ndarray, min_size: int = 2, protect: frozenset[int] = frozenset({TRANSPARENT_INDEX})
 ) -> tuple[np.ndarray, int]:
     """Remove connected components smaller than min_size, replacing with the
     majority color in a dilated neighborhood. Returns (result, n_removed)."""
@@ -199,7 +199,7 @@ def merge_near_colors(
     idx: np.ndarray,
     palette_hex: list[str],
     threshold: float = 0.03,
-    protect: frozenset[int] = frozenset({0}),
+    protect: frozenset[int] = frozenset({TRANSPARENT_INDEX}),
 ) -> tuple[np.ndarray, int]:
     """Remap pixels using palette entries within OKLab distance `threshold` of
     each other onto a single representative index (transitively -- a chain of
@@ -254,7 +254,7 @@ def enforce_palette(
 
 
 def close_silhouette(
-    idx: np.ndarray, radius: int = 1, transparent: int = 0
+    idx: np.ndarray, radius: int = 1, transparent: int = TRANSPARENT_INDEX
 ) -> tuple[np.ndarray, int]:
     """Binary-close the opaque mask to fill 1px pinholes, then open it to shave
     1px protrusions. Filled holes take the majority color of their own ring, so
@@ -289,7 +289,7 @@ def close_silhouette(
     return out, int((out != idx).sum())
 
 
-def thin_lines(idx: np.ndarray, transparent: int = 0) -> tuple[np.ndarray, int]:
+def thin_lines(idx: np.ndarray, transparent: int = TRANSPARENT_INDEX) -> tuple[np.ndarray, int]:
     """Collapse 2px-wide runs of a color back to 1px where the run is a line
     rather than a filled region.
 
@@ -334,13 +334,30 @@ def thin_lines(idx: np.ndarray, transparent: int = 0) -> tuple[np.ndarray, int]:
                     # `transparent` here speckled 1297px of holes across a photo
                     # in the B6 gate.
                     drop = end - 1
-                    beyond = end
+                    limit = idx.shape[0] if horizontal else idx.shape[1]
+
+                    def at(pos: int) -> int | None:
+                        if not 0 <= pos < limit:
+                            return None
+                        v = int(idx[pos, line_no] if horizontal else idx[line_no, pos])
+                        # Reject the line's own colour (a neighbouring component)
+                        # and transparency: thinning a line that sits on the
+                        # silhouette edge would erode the subject, which is
+                        # close_silhouette's job and not this one's.
+                        return None if v == color or v == transparent else v
+
+                    # Take the colour on either side of the run. Never invent
+                    # transparency: an interior line must thin into its
+                    # neighbour, and if neither side offers one, leave the pixel
+                    # alone rather than punch a hole. Falling back to
+                    # `transparent` here caused two separate regressions.
+                    fill = at(end) if at(end) is not None else at(start - 1)
+                    if fill is None:
+                        continue
                     if horizontal:
-                        fill = idx[beyond, line_no] if beyond < idx.shape[0] else transparent
-                        out[drop, line_no] = fill if fill != color else transparent
+                        out[drop, line_no] = fill
                     else:
-                        fill = idx[line_no, beyond] if beyond < idx.shape[1] else transparent
-                        out[line_no, drop] = fill if fill != color else transparent
+                        out[line_no, drop] = fill
     return out, int((out != idx).sum())
 
 
@@ -386,6 +403,44 @@ def snap_grid(idx: np.ndarray, cell_w: int, cell_h: int, offset_x: int = 0, offs
 
 # --- Pipeline ----------------------------------------------------------------
 
+
+# Which operations may legitimately change what is opaque. `close_silhouette`
+# exists to do exactly that; `remove_orphans` erases a speck floating in empty
+# space rather than recolouring it; `fix_jaggies` regularizes edges, and the
+# outermost region's edge *is* the silhouette, so it moves by design.
+# merge_near_colors, remove_aa and thin_lines only ever recolour — and a
+# per-operation pixel count cannot tell a fix from a disaster —
+# "thin_lines=1405px" read identically whether it thinned lines or punched 1405
+# holes through a photo (B6 gate). Asserting the property catches that class at
+# the moment it happens instead of on visual inspection weeks later.
+MAY_CHANGE_OPACITY = frozenset({"close_silhouette", "remove_orphans", "fix_jaggies"})
+
+
+def _merge_threshold(palette_hex: list[str], aggressiveness: float) -> float:
+    """Merge distance scaled to the palette's own spacing, not an absolute ΔE.
+
+    "Near-duplicate" only means anything relative to how far apart the palette's
+    entries normally sit. An absolute threshold erases low-contrast art whole:
+    at the old 0.01 + 0.04·a the default 0.03 was wider than the entire colour
+    spread of a dark glow VFX, collapsing 27 surviving colours to 4 (B6 gate).
+
+    The reference is the median nearest-neighbour distance between entries. A
+    well-spaced palette (what k-means produces) has a tight distribution and
+    nothing falls below the fraction we merge at; a palette carrying genuine
+    duplicates has them sitting far below its own median.
+    """
+    a = float(np.clip(aggressiveness, 0.0, 1.0))
+    if a <= 0.0 or len(palette_hex) < 3:
+        return 0.0
+    lab = palette_lab(palette_hex)
+    d = np.sqrt(((lab[:, None, :] - lab[None, :, :]) ** 2).sum(-1))
+    np.fill_diagonal(d, np.inf)
+    nn = d.min(axis=1)
+    nn = nn[np.isfinite(nn)]
+    if nn.size == 0:
+        return 0.0
+    return float(np.median(nn)) * (0.15 + 0.65 * a)
+
 # Order here is the order they run in (see run_pipeline), not the order given.
 OPERATIONS = (
     "merge_near_colors",
@@ -427,7 +482,7 @@ def run_pipeline(
             continue
         before = out
         if op == "merge_near_colors":
-            out, _ = merge_near_colors(out, palette_hex, threshold=0.01 + 0.04 * a)
+            out, _ = merge_near_colors(out, palette_hex, threshold=_merge_threshold(palette_hex, a))
         elif op == "remove_aa":
             rgb = remove_antialiasing(pal_rgb[out], threshold=0.06 + 0.14 * a)
             snapped = enforce_palette(rgb, palette_hex).astype(idx.dtype)
@@ -447,6 +502,18 @@ def run_pipeline(
         elif op == "fix_jaggies":
             out, _ = fix_jaggies(out, max_correction=int(round(2 * a)))
         report[op] = int((out != before).sum())
+        if op not in MAY_CHANGE_OPACITY:
+            moved = int(((before == TRANSPARENT_INDEX) != (out == TRANSPARENT_INDEX)).sum())
+            if moved:
+                raise ToolError(
+                    code="cleanup_invariant_violated",
+                    message=f"{op} changed {moved} pixels' transparency but is a recolour-only operation.",
+                    hint=(
+                        "This is a bug in the operation itself, not in your input. Re-run "
+                        f"without {op!r} in `operations` and report it."
+                    ),
+                    context={"operation": op, "pixels": moved},
+                )
 
     return out, report
 
