@@ -82,7 +82,8 @@ def test_apply_rejects_unknown_field_instead_of_dropping_it():
 
 def test_replacing_palette_regenerates_ramps_so_they_cannot_dangle():
     bible = StyleBible.create("proj", PAL)
-    assert bible.ramps["red"] == [1, 2, 3]
+    # PAL already starts with a black at index 0; reserving shifts everything up
+    assert bible.ramps["red"] == [2, 3, 4]
     changed = bible.apply({"palette": ["#000000", "#0c2a4a", "#1a5a9a", "#4a9ade"]})
     assert "ramps" in changed
     assert set(bible.ramps) == {"blue"}
@@ -99,7 +100,35 @@ def test_palette_is_stored_lowercase_whatever_case_it_arrives_in():
     """Bundled presets ship uppercase hex, Aseprite reads colors back lowercase,
     and set_palette's off-style check compares them as strings. Without
     canonical casing that warning fires on every correctly-on-palette sprite."""
+    from aseprite_mcp.color import TRANSPARENT_PLACEHOLDER
+
     bible = StyleBible.create("proj", ["#000000", "#3A0A14", "#A01838", "#D43A5A"])
-    assert bible.palette == ["#000000", "#3a0a14", "#a01838", "#d43a5a"]
+    assert bible.palette == [TRANSPARENT_PLACEHOLDER, "#000000", "#3a0a14", "#a01838", "#d43a5a"]
     bible.apply({"palette": ["#000000", "#0C2A4A", "#1A5A9A"]})
-    assert bible.palette == ["#000000", "#0c2a4a", "#1a5a9a"]
+    assert bible.palette == [TRANSPARENT_PLACEHOLDER, "#000000", "#0c2a4a", "#1a5a9a"]
+
+
+def test_project_palette_reserves_index_0_so_no_colour_is_silently_lost():
+    """Aseprite never draws entry 0. Without reserving, a project created from a
+    16-colour preset is a 15-colour project and nothing says so -- and the entry
+    it loses is index 0, which for every bundled preset is the darkest colour,
+    the one pixel-art outlines want most."""
+    from aseprite_mcp.color import TRANSPARENT_PLACEHOLDER
+    from aseprite_mcp.palettes import load_preset
+
+    preset = load_preset("pico8")["colors"]
+    bible = StyleBible.create("proj", preset)
+
+    assert bible.palette[0] == TRANSPARENT_PLACEHOLDER
+    assert len(bible.palette) - 1 == len(preset), "a colour went missing"
+    assert "#000000" in bible.palette[1:], "the darkest colour must be drawable"
+
+
+def test_reserving_survives_a_palette_update_without_stacking():
+    from aseprite_mcp.color import TRANSPARENT_PLACEHOLDER
+    from aseprite_mcp.palettes import load_preset
+
+    bible = StyleBible.create("proj", load_preset("pico8")["colors"])
+    bible.apply({"palette": load_preset("db16")["colors"]})
+    assert bible.palette.count(TRANSPARENT_PLACEHOLDER) == 1
+    assert bible.palette[0] == TRANSPARENT_PLACEHOLDER

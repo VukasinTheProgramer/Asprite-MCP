@@ -50,7 +50,8 @@ async def test_create_sprite_takes_canvas_and_palette_from_active_project(worksp
 
         info = await c.call_tool("get_sprite_info", {})
         assert info.structured_content["width"] == 48
-        assert info.structured_content["palette_size"] == 16
+        # 16 usable colours plus the reserved transparency slot at entry 0
+        assert info.structured_content["palette_size"] == 17
 
 
 async def test_create_sprite_without_size_or_project_says_what_to_do(workspace):
@@ -84,9 +85,24 @@ async def test_set_palette_warns_when_it_diverges_from_the_project(workspace):
         assert "dungeon" in _text(out)
 
 
-async def test_on_palette_set_produces_no_warning(workspace):
+async def test_a_sprite_left_on_the_project_palette_produces_no_warning(workspace):
+    """create_sprite applies the project palette, which already reserves index 0.
+    Touching nothing must not warn."""
     async with Client(mcp) as c:
-        out = await c.call_tool("style", {"action": "create", "project": "d", "palette": "pico8"})
+        await c.call_tool("style", {"action": "create", "project": "d", "palette": "pico8"})
+        out = await c.call_tool(
+            "create_sprite", {"name": "k", "asset_type": "character", "preview": False}
+        )
+        assert not out.is_error, _text(out)
+        assert "WARNING" not in _text(out)
+
+
+async def test_writing_a_raw_preset_over_a_project_warns_about_the_lost_colour(workspace):
+    """A project reserves index 0; a preset written straight to the sprite does
+    not, so its darkest colour lands on the slot that never renders. The sprite
+    really has lost a colour and the warning should say which."""
+    async with Client(mcp) as c:
+        await c.call_tool("style", {"action": "create", "project": "d", "palette": "pico8"})
         await c.call_tool("create_sprite", {"name": "k", "asset_type": "character", "preview": False})
 
         from aseprite_mcp.palettes import load_preset
@@ -94,8 +110,10 @@ async def test_on_palette_set_produces_no_warning(workspace):
         out = await c.call_tool(
             "set_palette", {"palette": load_preset("pico8")["colors"], "preview": False}
         )
-        assert not out.is_error, _text(out)
-        assert "WARNING" not in _text(out)
+        assert not out.is_error, _text(out)          # warns, never blocks
+        msg = _text(out)
+        assert "WARNING" in msg
+        assert "index 0" in msg and "#000000" in msg
 
 
 async def test_creating_a_duplicate_project_is_refused(workspace):

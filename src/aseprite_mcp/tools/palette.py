@@ -80,6 +80,7 @@ def register(mcp: MCPServer) -> None:
         for c in colors:
             hex_to_rgba(c)  # raises invalid_hex_color with the offending value
 
+
         color_lua = ",".join(
             f"Color{{r={r},g={g},b={b},a={a}}}" for r, g, b, a in (hex_to_rgba(c) for c in colors)
         )
@@ -139,14 +140,32 @@ def register(mcp: MCPServer) -> None:
         # sprite, an imported reference), but silent divergence is how a library
         # drifts out of style one sprite at a time.
         bible = session.active_style()
-        got = normalize_hex(final_colors)
-        if bible is not None and got != normalize_hex(bible.palette):
-            off = sorted(set(got) - set(normalize_hex(bible.palette)))
+        # Compare the DRAWABLE colours, not the raw lists. Entry 0 never renders,
+        # and a project reserves it explicitly while a preset passed straight to
+        # this tool does not -- comparing whole lists made set_palette("pico8")
+        # warn inside a pico8 project, which is the always-fires failure mode
+        # that teaches the model to ignore the warning.
+        got = set(normalize_hex(final_colors[1:]))
+        want = set(normalize_hex(bible.palette[1:])) if bible is not None else set()
+        if bible is not None and got != want:
+            off = sorted(got - want)
+            lost = sorted(want - got)
+            parts = []
+            if off:
+                parts.append(f"{len(off)} colors are not in the project: {off[:8]}")
+            if lost:
+                # The common case, and the confusing one: entry 0 never renders,
+                # so a preset written straight to the sprite drops whatever sat
+                # there -- usually its darkest color.
+                parts.append(
+                    f"{len(lost)} project colors are missing or sat at index 0 "
+                    f"(which never draws): {lost[:8]}"
+                )
             summary = (
-                f"WARNING: this palette differs from active project {bible.project!r}"
-                + (f" — {len(off)} colors are not in it: {off[:8]}" if off else " (same colors, different order)")
-                + ".\nIf that is deliberate, carry on; otherwise call style(action='get') "
-                "and use the project palette.\n\n" + summary
+                f"WARNING: this sprite's palette differs from active project "
+                f"{bible.project!r} — " + "; ".join(parts) + ".\n"
+                "If that is deliberate, carry on. Otherwise omit `palette` so the "
+                "project's own is used, which reserves index 0 for you.\n\n" + summary
             )
         blocks: list[str | MCPImage] = [summary, preview_image(render_palette_swatch(final_colors))]
         if preview:

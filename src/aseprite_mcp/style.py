@@ -12,7 +12,7 @@ from typing import Any
 
 import numpy as np
 
-from .color import rgb_to_oklab
+from .color import reserve_transparent, rgb_to_oklab
 from .errors import ToolError
 from .validation import hex_to_rgba
 
@@ -170,7 +170,14 @@ class StyleBible:
     @classmethod
     def create(cls, project: str, palette_hex: list[str], **overrides: Any) -> "StyleBible":
         """Build a bible with ramps and outline indices derived from the palette."""
-        palette_hex = normalize_hex(palette_hex)
+        # Reserve entry 0 the same way conform_image does. Aseprite never draws
+        # it, so without this a project created from a 16-colour preset is a
+        # 15-colour project and nothing says so — and the colour it loses is
+        # entry 0, which for every bundled preset is the darkest one, the one
+        # pixel-art outlines want most. auto_ramps and outline_candidates
+        # already skip index 0, so the internals knew it was unusable; only the
+        # palette itself did not.
+        palette_hex = reserve_transparent(normalize_hex(palette_hex))
         bible = cls(
             project=project,
             palette=list(palette_hex),
@@ -194,7 +201,7 @@ class StyleBible:
                 context={"valid": sorted(known)},
             )
         if fields.get("palette") is not None:
-            fields = {**fields, "palette": normalize_hex(fields["palette"])}
+            fields = {**fields, "palette": reserve_transparent(normalize_hex(fields["palette"]))}
         changed = []
         for k, v in fields.items():
             if v is not None and getattr(self, k) != v:
