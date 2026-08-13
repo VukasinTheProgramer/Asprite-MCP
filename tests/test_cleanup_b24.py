@@ -41,13 +41,24 @@ def test_close_silhouette_is_a_noop_on_a_clean_shape():
 
 
 def test_thin_lines_collapses_a_2px_line_to_1px():
-    idx = np.zeros((8, 10), dtype=np.int32)
+    idx = np.full((8, 10), 2, dtype=np.int32)   # opaque field to thin into
     idx[3, 2:8] = 4
     idx[4, 2:8] = 4  # a 2px-thick horizontal line
     out, changed = thin_lines(idx)
     assert changed > 0
     # one of the two rows survives at full length, the run is no longer 2 wide
     assert (out == 4).sum() < (idx == 4).sum()
+
+
+def test_thin_lines_will_not_erode_a_line_on_the_silhouette_edge():
+    """A 2px line with only transparency beside it has nothing to thin into.
+    Eroding it would shrink the subject, which is close_silhouette's job."""
+    idx = np.zeros((8, 10), dtype=np.int32)
+    idx[3, 2:8] = 4
+    idx[4, 2:8] = 4
+    out, changed = thin_lines(idx)
+    assert changed == 0
+    assert np.array_equal(out, idx)
 
 
 def test_thin_lines_leaves_a_filled_region_alone():

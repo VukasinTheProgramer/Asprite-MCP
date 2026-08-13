@@ -15,9 +15,9 @@
       "is_pixel_art": false
     },
     "error": false,
-    "summary": "Conformed nature_src.png -> 128x128, 32-color palette.\nSource grid: cell=32x32 confidence=0.01 (ratio downscale).\ncleanup: merge_near_colors=0px, remove_aa=6432px, remove_orphans=1165px, close_silhouette=0px, thin_lines=1405px, fix_jaggies=31px\nWritten to sprite.\nbefore:\nafter:",
+    "summary": "Conformed nature_src.png -> 128x128, 32-color palette.\nFitted to 128x126 (aspect preserved).\nSource grid: cell=32x32 confidence=0.01 (ratio downscale).\ncleanup: merge_near_colors=0px, remove_aa=6431px, remove_orphans=1153px, close_silhouette=275px, thin_lines=1323px, fix_jaggies=54px\nWritten to sprite.\nbefore:\nafter:",
     "colors_used": 31,
-    "opaque_px": 16367
+    "opaque_px": 16384
   },
   {
     "id": "pikachu",
@@ -35,9 +35,9 @@
       "is_pixel_art": false
     },
     "error": false,
-    "summary": "Conformed pikachu_src.png -> 64x64, 32-color palette.\nSource grid: cell=15x15 confidence=0.08 (ratio downscale).\ncleanup: merge_near_colors=1127px, remove_aa=146px, remove_orphans=170px, close_silhouette=743px, thin_lines=47px, fix_jaggies=3px\nWritten to sprite.\nbefore:\nafter:",
-    "colors_used": 20,
-    "opaque_px": 2321
+    "summary": "Conformed pikachu_src.png -> 64x64, 32-color palette.\nFitted to 61x64 (aspect preserved).\nSource grid: cell=15x15 confidence=0.08 (ratio downscale).\ncleanup: merge_near_colors=630px, remove_aa=122px, remove_orphans=185px, close_silhouette=663px, thin_lines=48px, fix_jaggies=6px\nWritten to sprite.\nbefore:\nafter:",
+    "colors_used": 22,
+    "opaque_px": 2114
   },
   {
     "id": "turtle",
@@ -55,9 +55,9 @@
       "is_pixel_art": false
     },
     "error": false,
-    "summary": "Conformed turtle_src.png -> 32x32, 32-color palette.\nSource grid: cell=4x8 confidence=0.05 (ratio downscale).\ncleanup: merge_near_colors=33px, remove_aa=75px, remove_orphans=32px, close_silhouette=10px, thin_lines=52px, fix_jaggies=1px\nWritten to sprite.\nbefore:\nafter:",
-    "colors_used": 13,
-    "opaque_px": 291
+    "summary": "Conformed turtle_src.png -> 32x32, 32-color palette.\nFitted to 32x32 (aspect preserved).\nSource grid: cell=4x8 confidence=0.05 (ratio downscale).\ncleanup: merge_near_colors=13px, remove_aa=77px, remove_orphans=42px, close_silhouette=10px, thin_lines=49px, fix_jaggies=1px\nWritten to sprite.\nbefore:\nafter:",
+    "colors_used": 14,
+    "opaque_px": 300
   },
   {
     "id": "orb",
@@ -75,9 +75,9 @@
       "is_pixel_art": false
     },
     "error": false,
-    "summary": "Conformed orb_src.png -> 32x32, 32-color palette.\nSource grid: cell=2x2 confidence=0.14 (ratio downscale).\ncleanup: merge_near_colors=363px, remove_aa=13px, remove_orphans=15px, close_silhouette=0px, thin_lines=0px, fix_jaggies=0px\nWritten to sprite.\nbefore:\nafter:",
-    "colors_used": 4,
-    "opaque_px": 1024
+    "summary": "Conformed orb_src.png -> 32x32, 32-color palette.\nFitted to 32x21 (aspect preserved).\nSource grid: cell=2x2 confidence=0.14 (ratio downscale).\ncleanup: merge_near_colors=0px, remove_aa=132px, remove_orphans=41px, close_silhouette=82px, thin_lines=32px, fix_jaggies=0px\nWritten to sprite.\nbefore:\nafter:",
+    "colors_used": 18,
+    "opaque_px": 754
   },
   {
     "id": "person",
@@ -95,8 +95,8 @@
       "is_pixel_art": false
     },
     "error": false,
-    "summary": "Conformed person_src.png -> 64x64, 32-color palette.\nSource grid: cell=32x8 confidence=0.02 (ratio downscale).\ncleanup: merge_near_colors=812px, remove_aa=238px, remove_orphans=142px, close_silhouette=376px, thin_lines=43px, fix_jaggies=0px\nWritten to sprite.\nbefore:\nafter:",
-    "colors_used": 19,
-    "opaque_px": 1679
+    "summary": "Conformed person_src.png -> 64x64, 32-color palette.\nFitted to 46x64 (aspect preserved).\nSource grid: cell=32x8 confidence=0.02 (ratio downscale).\ncleanup: merge_near_colors=32px, remove_aa=364px, remove_orphans=215px, close_silhouette=343px, thin_lines=97px, fix_jaggies=1px\nWritten to sprite.\nbefore:\nafter:",
+    "colors_used": 30,
+    "opaque_px": 1305
   }
 ]
