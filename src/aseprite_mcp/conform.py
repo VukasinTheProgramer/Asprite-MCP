@@ -130,6 +130,7 @@ def conform(
     dither: Dither = "none",
     lightness_weight: float = 1.3,
     fit: Fit = "contain",
+    reserve_index_0: bool = True,
 ) -> tuple[np.ndarray, np.ndarray, ConformReport]:
     """rgba (H,W,4) float [0,1] -> (palette indices (th,tw), alpha mask (th,tw)
     bool, report). `target_size` is (w, h). `grid` skips auto-detection when
@@ -141,6 +142,9 @@ def conform(
     behaviour: it distorts anything whose aspect doesn't already match the
     target. A 183x275 portrait forced into 64x64 comes out stretched 1.5x wide,
     which is what happened to the person image in the B6 gate.
+
+    `reserve_index_0` treats palette entry 0 as the transparency slot and never
+    quantizes onto it. Pass False only for a palette whose entry 0 really is art.
     """
     tw, th = target_size
     rgb, alpha = split_alpha(rgba)
@@ -158,10 +162,17 @@ def conform(
         rgb = resize_lanczos(rgb, (mid_w, mid_h))
     rgb = downscale_modal(rgb, (fw, fh))
 
+    # Quantize against the art colours only. Parking a placeholder at entry 0 is
+    # not enough on its own: any colour in the palette is a reachable match, and
+    # #ff00ff is exactly what a downscaled red/blue checkerboard blends toward —
+    # so pixels landed on the reserved slot and rendered as holes anyway.
+    art = palette_hex[1:] if reserve_index_0 and len(palette_hex) > 1 else palette_hex
+    offset = 1 if art is not palette_hex else 0
+
     if dither == "none":
-        idx_small = enforce_palette(rgb, palette_hex, lightness_weight)
+        idx_small = enforce_palette(rgb, art, lightness_weight) + offset
     else:
-        idx_small = apply_bayer(rgb, palette_hex, dither, lightness_weight)
+        idx_small = apply_bayer(rgb, art, dither, lightness_weight) + offset
     alpha_small = resize_nearest(alpha, (fw, fh)) > 0.5
 
     if (fw, fh) == (tw, th):

@@ -15,6 +15,7 @@ from pydantic import Field
 
 from ..cleanup import OPERATIONS, run_pipeline
 from ..color import extract_palette as _extract_palette
+from ..color import reserve_transparent
 from ..conform import conform as run_conform
 from ..deps import Bridge, Session
 from ..errors import ToolError
@@ -66,7 +67,10 @@ def _resolve_palette(
     sprite_hex: list[str] | None,
     source_rgba: np.ndarray | None = None,
     palette_size: int = 16,
+    project_hex: list[str] | None = None,
 ) -> list[str]:
+    """Precedence: explicit list > "auto" > preset name > active project > the
+    sprite's own palette. Whatever wins, entry 0 ends up reserved."""
     if isinstance(palette, list):
         colors = palette
     elif palette == "auto":
@@ -80,18 +84,29 @@ def _resolve_palette(
         )
     elif isinstance(palette, str):
         colors = load_preset(palette)["colors"]
+    elif project_hex is not None:
+        # B5: palette=None means the active project's palette. This is the lock
+        # Phase A exists for -- without it a project can be active and conform
+        # still quantizes to something else, and the library drifts anyway.
+        colors = project_hex
     elif sprite_hex is not None:
         colors = sprite_hex
     else:
         raise ToolError(
             code="no_palette",
-            message="No palette given and no active sprite to read one from.",
-            hint="Pass palette=<preset name or hex list>, or call create_sprite / "
-            "set_palette first so conform_image can default to it.",
+            message="No palette given, no active style project, and no sprite to read one from.",
+            hint="Pass palette=<preset name or hex list>, activate a project with "
+            "style(action='set_active'), or call create_sprite / set_palette first.",
         )
     for c in colors:
         hex_to_rgba(c)  # raises invalid_hex_color with the offending value
-    return colors
+    # Every branch, not just "auto". Aseprite renders entry 0 transparent
+    # whatever colour sits there, and every bundled preset puts a real dark
+    # there (pico8 #000000, db16 #140c1c) -- conforming a sprite to pico8
+    # erased 30% of its opaque pixels. Idempotent, so an already-reserved
+    # palette passes through unchanged. The resolved palette is written back
+    # to the sprite below, so shifting indices by one stays consistent.
+    return reserve_transparent(colors)
 
 
 def _nearest_upscale_png(rgba01: np.ndarray, max_dim: int = _MAX_DIM) -> bytes:
@@ -163,10 +178,15 @@ def register(mcp: MCPServer) -> None:
         majority-color-per-cell instead of blurring, and can auto-repair the
         result (`auto_cleanup`, chains into the `cleanup` operations).
 
-        `palette` defaults to the target sprite's current palette; pass a preset
-        name (pico8, db16, sweetie16, gameboy) or explicit hex list to lock to
-        something else — that palette is written onto the sprite, replacing
-        whatever was there.
+        `palette` defaults to the active style project's palette, falling back
+        to the target sprite's current one when no project is active. Pass a
+        preset name (pico8, db16, sweetie16, gameboy) or an explicit hex list to
+        lock to something else — that palette is written onto the sprite,
+        replacing whatever was there. Leaving it unset is the right choice
+        inside a project: it is what keeps a whole asset set on one palette.
+
+        Palette entry 0 is always reserved for transparency, so a palette you
+        pass in is shifted up by one to make room.
 
         `palette="auto"` derives a `palette_size`-color palette from the source
         image itself by k-means in OKLab. Prefer it when converting reference
@@ -237,7 +257,11 @@ def register(mcp: MCPServer) -> None:
             )
             sprite_hex = pal_result["hex"]
 
-        palette_hex = _resolve_palette(palette, sprite_hex, rgba, palette_size)
+        bible = session.active_style()
+        palette_hex = _resolve_palette(
+            palette, sprite_hex, rgba, palette_size,
+            project_hex=bible.palette if bible is not None else None,
+        )
 
         idx, alpha_mask, report = run_conform(rgba, (tw, th), palette_hex, dither=dither, fit=fit)
         # Index 0 is always transparent in Aseprite regardless of its color

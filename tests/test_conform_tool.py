@@ -96,7 +96,11 @@ async def test_conform_image_writes_into_matching_sprite(workspace, read_pixels)
 
     rows = read_pixels(str(workspace / "s.aseprite"), 4, 4)
     used = {ch for row in rows for ch in row}
-    assert used <= {"0", "1"}  # only the two palette indices, nothing off-palette
+    # Entry 0 is reserved for transparency, so the two colours passed in land at
+    # indices 1 and 2. Nothing may land on 0 — that would render as a hole,
+    # which is how conforming to pico8 used to erase 30% of a sprite.
+    assert used <= {"1", "2"}, f"off-palette or transparent pixels: {used}"
+    assert "0" not in used
 
 
 @pytest.mark.asyncio

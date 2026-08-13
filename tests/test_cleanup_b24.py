@@ -131,3 +131,20 @@ def test_thin_lines_never_punches_holes_in_the_interior_of_a_shape():
     out, changed = thin_lines(idx)
     assert changed > 0, "the line should still thin"
     assert (out != 0).all(), "no pixel may become transparent"
+
+
+def test_close_silhouette_does_not_erode_a_shape_that_fills_the_canvas():
+    """Morphology at the array edge: the closing step's erosion treats outside
+    as background and eats inward from all four sides. On a fully opaque 4x4 it
+    punched a 2x2 hole straight through the middle."""
+    idx = np.full((4, 4), 1, dtype=np.int32)
+    out, changed = close_silhouette(idx)
+    assert changed == 0, f"eroded a solid canvas: {out}"
+    assert (out == 1).all()
+
+
+def test_close_silhouette_keeps_a_shape_running_to_the_edge():
+    idx = np.zeros((10, 10), dtype=np.int32)
+    idx[:, 0:5] = 2           # a block flush against the left edge
+    out, _ = close_silhouette(idx)
+    assert (out[:, 0:5] == 2).all(), "shaved the edge-flush side"

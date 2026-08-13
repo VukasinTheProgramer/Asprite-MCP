@@ -266,12 +266,18 @@ def close_silhouette(
     """
     st = np.ones((2 * radius + 1, 2 * radius + 1), dtype=bool)
     solid = idx != transparent
-    closed = ndimage.binary_closing(solid, st)
-    # border_value=1 so the array edge counts as filled. Without it the erosion
-    # half of the opening treats everything outside the canvas as background and
-    # eats a 1px border off any shape that runs to the edge — which for a sprite
-    # cropped to its own content is most of them.
-    opened = ndimage.binary_opening(closed, st, border_value=1)
+
+    # Pad by the radius, replicating the edge, and crop back afterwards. Pixels
+    # outside the canvas are unknown, and neither morphology default handles that
+    # honestly: binary_closing's erosion half treats outside as background and
+    # eats a border off any shape running to the canvas edge, while border_value=1
+    # invents filled pixels. Replicating means a shape that reaches the edge
+    # simply continues. Without this, close_silhouette punched a 2x2 hole through
+    # a fully opaque 4x4 sprite — it eroded from all four sides at once.
+    p = radius + 1
+    padded = np.pad(solid, p, mode="edge")
+    worked = ndimage.binary_opening(ndimage.binary_closing(padded, st), st)
+    opened = worked[p:-p, p:-p]
 
     out = idx.copy()
     out[solid & ~opened] = transparent  # protrusions shaved off

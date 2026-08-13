@@ -1,6 +1,7 @@
 import time
 
 import numpy as np
+import pytest
 
 from aseprite_mcp.conform import conform, downscale_modal
 
@@ -25,7 +26,11 @@ def test_conform_round_trips_a_known_upscaled_sprite():
     upscaled_rgb = _upscale_nearest(sprite_rgb, 8)
     rgba = np.concatenate([upscaled_rgb, np.ones((256, 256, 1))], axis=-1)
 
-    idx, alpha_mask, report = conform(rgba, (32, 32), palette)
+    # reserve_index_0=False: this fixture's palette genuinely has art at entry 0,
+    # which a real sprite never does (Aseprite renders entry 0 transparent). The
+    # round-trip is testing conform's maths, so the reservation is turned off
+    # rather than shifting every expected index by one.
+    idx, alpha_mask, report = conform(rgba, (32, 32), palette, reserve_index_0=False)
 
     assert report["grid"]["is_pixel_art"] is True
     assert alpha_mask.all()
@@ -103,23 +108,26 @@ def test_downscale_modal_preserves_hard_edge_no_blending():
 
 
 def test_cleanup_output_alpha_must_derive_from_indices_not_conform_mask():
-    """Index 0 is transparent in Aseprite whatever color palette entry 0 holds.
-    Cleanup pushes pixels to index 0 that conform's alpha mask still calls
-    opaque, so anything rendering the result (previews) has to take alpha from
-    the post-cleanup indices. Taking it from the stale mask paints those pixels
-    in palette[0]'s color at full opacity -- visible speckle that is not in the
-    sprite that actually gets written."""
+    """Index 0 is transparent in Aseprite whatever colour palette entry 0 holds.
+    Cleanup can still push a pixel to index 0 that conform's alpha mask calls
+    opaque -- remove_orphans erases a speck floating in empty space rather than
+    recolouring it -- so anything rendering the result has to take alpha from the
+    post-cleanup indices. Taking it from the stale mask paints those pixels in
+    palette[0]'s colour at full opacity: speckle that is not in the written sprite.
+
+    The divergence is built directly rather than hoped out of conform. conform no
+    longer emits index 0 for an opaque pixel at all (it quantizes against the art
+    colours only), so driving this through conform silently stopped testing
+    anything -- the previous fixture's own guard assertion caught that.
+    """
     from aseprite_mcp.cleanup import OPERATIONS, run_pipeline
 
-    # subject plus isolated specks over a transparent field
-    rgba = np.zeros((64, 64, 4))
-    rgba[20:44, 20:44] = [0.8, 0.1, 0.1, 1.0]
-    rgba[5, 5] = [0.1, 0.8, 0.1, 1.0]
-    rgba[58, 58] = [0.1, 0.8, 0.1, 1.0]
-    palette = ["#1e1ec8", "#c81e1e", "#1ec81e"]
+    palette = ["#ff00ff", "#c81e1e", "#1e1ec8"]
+    pre = np.full((16, 16), 1, dtype=np.int32)
+    pre[0:6, 0:6] = 0      # a clearly transparent corner
+    pre[3, 3] = 2          # a lone speck whose whole ring is transparent
+    alpha_mask = pre != 0  # what conform would have reported as opaque
 
-    idx, alpha_mask, _ = conform(rgba, (16, 16), palette)
-    pre = np.where(alpha_mask, idx, 0).astype(np.int32)
     post, _ = run_pipeline(pre, palette, list(OPERATIONS), aggressiveness=0.5)
 
     stale = int(((post == 0) & alpha_mask).sum())
