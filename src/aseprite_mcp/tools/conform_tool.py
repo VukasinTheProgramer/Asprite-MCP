@@ -14,6 +14,7 @@ from PIL import Image
 from pydantic import Field
 
 from ..cleanup import OPERATIONS, run_pipeline
+from ..color import extract_palette as _extract_palette
 from ..conform import conform as run_conform
 from ..deps import Bridge, Session
 from ..errors import ToolError
@@ -60,9 +61,23 @@ def _load_rgba01(src: Path, remove_background: bool = False, bg_tolerance: int =
     return np.asarray(im, dtype=float) / 255.0
 
 
-def _resolve_palette(palette: str | list[str] | None, sprite_hex: list[str] | None) -> list[str]:
+def _resolve_palette(
+    palette: str | list[str] | None,
+    sprite_hex: list[str] | None,
+    source_rgba: np.ndarray | None = None,
+    palette_size: int = 16,
+) -> list[str]:
     if isinstance(palette, list):
         colors = palette
+    elif palette == "auto":
+        if source_rgba is None:
+            raise ToolError(
+                code="no_source_for_auto_palette",
+                message="palette='auto' needs the source image to extract from.",
+            )
+        colors = _extract_palette(
+            source_rgba[..., :3], palette_size, alpha=source_rgba[..., 3]
+        )
     elif isinstance(palette, str):
         colors = load_preset(palette)["colors"]
     elif sprite_hex is not None:
@@ -126,6 +141,7 @@ def register(mcp: MCPServer) -> None:
         image_path: str,
         target_size: list[Annotated[int, Field(ge=1, le=1024)]],
         palette: str | list[str] | None = None,
+        palette_size: Annotated[int, Field(ge=2, le=256)] = 16,
         dither: Literal["none", "bayer2x2", "bayer4x4"] = "none",
         auto_cleanup: bool = True,
         aggressiveness: float = 0.5,
@@ -147,6 +163,13 @@ def register(mcp: MCPServer) -> None:
         name (pico8, db16, sweetie16, gameboy) or explicit hex list to lock to
         something else — that palette is written onto the sprite, replacing
         whatever was there.
+
+        `palette="auto"` derives a `palette_size`-color palette from the source
+        image itself by k-means in OKLab. Prefer it when converting reference
+        art whose own colors you want to keep, over letting a preset approximate
+        them. Lower `palette_size` reads as more deliberately pixel-art (12-16
+        is a typical single-sprite budget); higher retains more detail but
+        starts to look like a photo downscale.
 
         `import_to_sprite=True` (default) requires an already-created sprite
         whose canvas equals `target_size` — call `create_sprite` first. Pass
@@ -204,7 +227,7 @@ def register(mcp: MCPServer) -> None:
             )
             sprite_hex = pal_result["hex"]
 
-        palette_hex = _resolve_palette(palette, sprite_hex)
+        palette_hex = _resolve_palette(palette, sprite_hex, rgba, palette_size)
 
         idx, alpha_mask, report = run_conform(rgba, (tw, th), palette_hex, dither=dither)
         # Index 0 is always transparent in Aseprite regardless of its color
@@ -247,7 +270,10 @@ def register(mcp: MCPServer) -> None:
 
         assert path is not None  # import_to_sprite branch always sets it
         px_lua = ",".join(f"{x},{y},{int(out[y, x])}" for y in range(th) for x in range(tw))
-        if isinstance(palette, (str, list)):
+        # An explicit palette (preset/list) and an auto-extracted one both have
+        # to be written onto the sprite; only the "default to whatever the
+        # sprite already has" case can skip it.
+        if palette is not None:
             color_lua = ",".join(
                 f"Color{{r={r},g={g},b={b},a={a}}}" for r, g, b, a in (hex_to_rgba(c) for c in palette_hex)
             )
