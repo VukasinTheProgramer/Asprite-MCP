@@ -9,3 +9,7 @@ build/
 
 # per §0.4 — user workspace, never committed
 .aseprite-mcp/
+
+# gate output, generated sprites, scratch renders — regenerate, don't commit
+test_aseprite/
+reviews/
