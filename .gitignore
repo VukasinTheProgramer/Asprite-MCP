@@ -13,3 +13,5 @@ build/
 # gate output, generated sprites, scratch renders — regenerate, don't commit
 test_aseprite/
 reviews/
+eval/results/
+eval/manifest.json

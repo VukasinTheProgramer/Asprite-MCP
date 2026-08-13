@@ -38,6 +38,13 @@ def remove_orphans(
     return out, removed
 
 
+# An anti-aliased pixel is a fringe: at most this many of its nine neighbours
+# (itself included) carry the same colour. Above that it is a shading band.
+# 4 rather than 3 because a fringe bending around a corner sees more of itself;
+# a 2px-wide deliberate band still sits at 5-6, so the two stay separable.
+_AA_MAX_SAME_NEIGHBOURS = 4
+
+
 def remove_antialiasing(rgb: np.ndarray, threshold: float = 0.12) -> np.ndarray:
     """rgb (H,W,3) float [0,1]. For each pixel, find the two most distant
     colors in its 3x3 neighborhood; if the pixel lies near the segment
@@ -61,10 +68,18 @@ def remove_antialiasing(rgb: np.ndarray, threshold: float = 0.12) -> np.ndarray:
             t = float(np.clip(((c - a) @ ab) / seg_len_sq, 0, 1))
             proj = a + t * ab
             dist_to_segment = float(np.sqrt(((c - proj) ** 2).sum()))
-            # near the segment AND meaningfully interior => it's a blend
-            if dist_to_segment < threshold and 0.2 < t < 0.8:
-                snap = a if t < 0.5 else b
-                out[y, x] = oklab_to_rgb(snap)
+            if not (dist_to_segment < threshold and 0.2 < t < 0.8):
+                continue
+            # Lying between two colours is not enough: the middle step of a
+            # deliberate 3-tone ramp does too, and snapping it away eats real
+            # shading. An AA pixel is a thin fringe -- few of its 3x3 neighbours
+            # share its colour -- whereas a shading band is a region. Measured on
+            # the hand-made control, this is the difference between 11 pixels of
+            # damage and 0.
+            same = int((np.abs(nb - c).sum(-1) < 1e-6).sum())  # includes itself
+            if same > _AA_MAX_SAME_NEIGHBOURS:
+                continue
+            out[y, x] = oklab_to_rgb(a if t < 0.5 else b)
     return out
 
 
@@ -254,7 +269,7 @@ def enforce_palette(
 
 
 def close_silhouette(
-    idx: np.ndarray, radius: int = 1, transparent: int = TRANSPARENT_INDEX
+    idx: np.ndarray, radius: int = 1, transparent: int = TRANSPARENT_INDEX, max_hole: int = 4
 ) -> tuple[np.ndarray, int]:
     """Binary-close the opaque mask to fill 1px pinholes, then open it to shave
     1px protrusions. Filled holes take the majority color of their own ring, so
@@ -264,34 +279,38 @@ def close_silhouette(
     leaves a single-pixel whisker hanging off the edge; both read as damage
     rather than as an intentional shape.
     """
-    st = np.ones((2 * radius + 1, 2 * radius + 1), dtype=bool)
     solid = idx != transparent
-
-    # Pad by the radius, replicating the edge, and crop back afterwards. Pixels
-    # outside the canvas are unknown, and neither morphology default handles that
-    # honestly: binary_closing's erosion half treats outside as background and
-    # eats a border off any shape running to the canvas edge, while border_value=1
-    # invents filled pixels. Replicating means a shape that reaches the edge
-    # simply continues. Without this, close_silhouette punched a 2x2 hole through
-    # a fully opaque 4x4 sprite — it eroded from all four sides at once.
-    p = radius + 1
-    padded = np.pad(solid, p, mode="edge")
-    worked = ndimage.binary_opening(ndimage.binary_closing(padded, st), st)
-    opened = worked[p:-p, p:-p]
-
     out = idx.copy()
-    out[solid & ~opened] = transparent  # protrusions shaved off
+    nbrs = np.ones((3, 3), dtype=bool)
 
-    filled = opened & ~solid
-    if filled.any():
-        comps, n = label(filled, connectivity=2, return_num=True)
-        for comp_id in range(1, n + 1):
-            comp = comps == comp_id
-            ring = ndimage.binary_dilation(comp, np.ones((3, 3), dtype=bool)) & solid
-            neighbors = idx[ring]
-            if neighbors.size:
-                vals, counts = np.unique(neighbors, return_counts=True)
-                out[comp] = vals[counts.argmax()]
+    # Morphological opening/closing was the obvious implementation and the wrong
+    # one: it cannot distinguish a stray whisker from a deliberate 1px limb, and
+    # it erodes from the canvas edge (it once punched a 2x2 hole through a fully
+    # opaque 4x4). Both halves are now stated directly, which is also what the
+    # docstring always claimed they did.
+
+    # Fill only true pinholes: transparent regions fully enclosed by the subject.
+    # A gap that reaches the canvas border is background, not a hole -- the space
+    # between a character's legs must survive.
+    holes, n = label(~solid, connectivity=1, return_num=True)
+    border = set(holes[0, :]) | set(holes[-1, :]) | set(holes[:, 0]) | set(holes[:, -1])
+    for comp_id in range(1, n + 1):
+        if comp_id in border:
+            continue
+        comp = holes == comp_id
+        if int(comp.sum()) > max_hole:
+            continue
+        ring = ndimage.binary_dilation(comp, nbrs) & solid
+        neighbors = idx[ring]
+        if neighbors.size:
+            vals, counts = np.unique(neighbors, return_counts=True)
+            out[comp] = vals[counts.argmax()]
+
+    # Shave only genuinely isolated protrusions: an opaque pixel with at most one
+    # opaque neighbour in 8-connectivity. A 1px diagonal limb has two, so it
+    # survives; a whisker hanging off an edge has one and does not.
+    degree = ndimage.convolve(solid.astype(np.int16), nbrs.astype(np.int16), mode="constant") - solid
+    out[solid & (degree <= 1)] = transparent
     return out, int((out != idx).sum())
 
 
@@ -490,7 +509,7 @@ def run_pipeline(
         if op == "merge_near_colors":
             out, _ = merge_near_colors(out, palette_hex, threshold=_merge_threshold(palette_hex, a))
         elif op == "remove_aa":
-            rgb = remove_antialiasing(pal_rgb[out], threshold=0.06 + 0.14 * a)
+            rgb = remove_antialiasing(pal_rgb[out], threshold=0.20 * a)
             snapped = enforce_palette(rgb, palette_hex).astype(idx.dtype)
             # Index 0 is transparency, not a color. Round-tripping it through RGB
             # makes it whatever palette entry 0 happens to look like, so the mask
@@ -502,9 +521,14 @@ def run_pipeline(
         elif op == "remove_orphans":
             out, _ = remove_orphans(out, min_size=int(round(1 + 3 * a)))
         elif op == "close_silhouette":
-            out, _ = close_silhouette(out, radius=1)
+            # No threshold of its own, so it has to be gated explicitly or
+            # aggressiveness=0 still shaves protrusions off clean art -- it took
+            # 2 opaque pixels off the hand-made control's 1px legs.
+            if a > 0.0:
+                out, _ = close_silhouette(out, radius=1)
         elif op == "thin_lines":
-            out, _ = thin_lines(out)
+            if a > 0.0:
+                out, _ = thin_lines(out)
         elif op == "fix_jaggies":
             out, _ = fix_jaggies(out, max_correction=int(round(2 * a)))
         report[op] = int((out != before).sum())

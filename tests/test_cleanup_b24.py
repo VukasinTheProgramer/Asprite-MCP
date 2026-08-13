@@ -23,13 +23,26 @@ def test_close_silhouette_fills_a_pinhole_with_its_own_ring_colour():
     assert changed == 1
 
 
-def test_close_silhouette_shaves_a_single_pixel_whisker():
+def test_close_silhouette_shaves_a_pixel_hanging_by_one_corner():
+    """Only genuinely isolated tips. Morphological opening removed anything thin,
+    which ate a hand-drawn sprite's 1px legs -- so the rule is now "at most one
+    opaque neighbour in 8-connectivity", which a limb never satisfies."""
     idx = np.zeros((8, 8), dtype=np.int32)
     idx[2:6, 2:6] = 3
-    idx[1, 3] = 3  # a 1px protrusion off the top edge
+    idx[1, 1] = 3  # touches the body only at the (2,2) corner
     out, _ = close_silhouette(idx)
-    assert out[1, 3] == 0
+    assert out[1, 1] == 0
     assert (out[2:6, 2:6] == 3).all()  # the body itself is untouched
+
+
+def test_close_silhouette_keeps_a_bump_attached_along_an_edge():
+    """A 1px bump sitting on a flat edge has three neighbours. At pixel-art scale
+    that is usually deliberate -- a horn, a rivet, a stud -- so it stays."""
+    idx = np.zeros((8, 8), dtype=np.int32)
+    idx[2:6, 2:6] = 3
+    idx[1, 3] = 3
+    out, changed = close_silhouette(idx)
+    assert out[1, 3] == 3 and changed == 0
 
 
 def test_close_silhouette_is_a_noop_on_a_clean_shape():
