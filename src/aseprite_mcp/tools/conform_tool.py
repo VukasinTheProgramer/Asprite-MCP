@@ -217,133 +217,137 @@ def register(mcp: MCPServer) -> None:
         Example — a 256x256 render of a clean 8x upscale, locked to pico8:
             conform_image(image_path="render.png", target_size=[32, 32], palette="pico8")
         """
-        if len(target_size) != 2:
-            raise ToolError(
-                code="invalid_target_size",
-                message=f"target_size must be [width, height], got {target_size}.",
-            )
-        tw, th = target_size
-        if not 0.0 <= aggressiveness <= 1.0:
-            raise ToolError(
-                code="aggressiveness_out_of_range",
-                message=f"aggressiveness={aggressiveness} is outside 0.0-1.0.",
-            )
-
-        src = _resolve_image(session, image_path, allow_external_path)
-        rgba = _load_rgba01(src, remove_background)
-
-        sprite_hex: list[str] | None = None
-        path: str | None = None
-        if import_to_sprite:
-            path = session.resolve_sprite(sprite)
-            canvas = _canvas_info(bridge, path)
-            if canvas["width"] != tw or canvas["height"] != th:
+        # One span across the whole read-modify-write: the pixels written
+        # below are computed from the read above, so another tool landing
+        # between them would be clobbered by our stale result (CLAUDE.md #2).
+        with bridge.serialized():
+            if len(target_size) != 2:
                 raise ToolError(
-                    code="canvas_size_mismatch",
-                    message=f"Sprite is {canvas['width']}x{canvas['height']} but "
-                    f"target_size is {tw}x{th}.",
-                    hint="Call create_sprite with matching dimensions first, or "
-                    "pass import_to_sprite=False to preview without a sprite.",
-                    context={"canvas": {"width": canvas["width"], "height": canvas["height"]}},
+                    code="invalid_target_size",
+                    message=f"target_size must be [width, height], got {target_size}.",
                 )
-            pal_result = bridge.execute(
+            tw, th = target_size
+            if not 0.0 <= aggressiveness <= 1.0:
+                raise ToolError(
+                    code="aggressiveness_out_of_range",
+                    message=f"aggressiveness={aggressiveness} is outside 0.0-1.0.",
+                )
+
+            src = _resolve_image(session, image_path, allow_external_path)
+            rgba = _load_rgba01(src, remove_background)
+
+            sprite_hex: list[str] | None = None
+            path: str | None = None
+            if import_to_sprite:
+                path = session.resolve_sprite(sprite)
+                canvas = _canvas_info(bridge, path)
+                if canvas["width"] != tw or canvas["height"] != th:
+                    raise ToolError(
+                        code="canvas_size_mismatch",
+                        message=f"Sprite is {canvas['width']}x{canvas['height']} but "
+                        f"target_size is {tw}x{th}.",
+                        hint="Call create_sprite with matching dimensions first, or "
+                        "pass import_to_sprite=False to preview without a sprite.",
+                        context={"canvas": {"width": canvas["width"], "height": canvas["height"]}},
+                    )
+                pal_result = bridge.execute(
+                    f"local spr = J.sprite({lua_str(path)})\n"
+                    "local pal = spr.palettes[1]\n"
+                    "local hex = {}\n"
+                    "for i = 0, #pal - 1 do\n"
+                    "  local c = pal:getColor(i)\n"
+                    '  hex[i+1] = string.format("#%02x%02x%02x", c.red, c.green, c.blue)\n'
+                    "end\nreturn { hex = hex }"
+                )
+                sprite_hex = pal_result["hex"]
+
+            bible = session.active_style()
+            palette_hex = _resolve_palette(
+                palette, sprite_hex, rgba, palette_size,
+                project_hex=bible.palette if bible is not None else None,
+            )
+
+            idx, alpha_mask, report = run_conform(rgba, (tw, th), palette_hex, dither=dither, fit=fit)
+            # Index 0 is always transparent in Aseprite regardless of its color
+            # (drawing.py's get_region_as_grid documents the same rule) -- force it
+            # everywhere conform's alpha threshold says the pixel isn't there.
+            out = np.where(alpha_mask, idx, 0).astype(np.int32)
+
+            cleanup_report: dict[str, int] = {}
+            if auto_cleanup:
+                out, cleanup_report = run_pipeline(out, palette_hex, list(OPERATIONS), aggressiveness)
+
+            summary_lines = [
+                f"Conformed {image_path} -> {tw}x{th}, {len(palette_hex)}-color palette.",
+                f"Fitted to {report['fitted_size'][0]}x{report['fitted_size'][1]} "
+                f"({'aspect preserved' if fit == 'contain' else 'stretched to fill'}).",
+                f"Source grid: cell={report['grid']['cell_w']}x{report['grid']['cell_h']} "
+                f"confidence={report['grid']['confidence']:.2f} "
+                f"({'snapped' if report['grid']['is_pixel_art'] else 'ratio downscale'}).",
+            ]
+            if auto_cleanup:
+                summary_lines.append(
+                    "cleanup: " + ", ".join(f"{op}={n}px" for op, n in cleanup_report.items())
+                )
+
+            before_png = _downscale_lanczos_png(rgba)
+            pal_rgba = np.array([(*hex_to_rgba(h)[:3], 255) for h in palette_hex], dtype=float) / 255.0
+            after_rgba = pal_rgba[out]
+            # Alpha must come from the post-cleanup indices, not conform's original
+            # mask: cleanup moves pixels to index 0, which Aseprite renders as
+            # transparent regardless of what color entry 0 holds. Reusing the stale
+            # mask paints those pixels as palette[0] at full opacity, so the preview
+            # shows speckle that isn't in the sprite that actually got written.
+            after_rgba[..., 3] = (out != 0).astype(float)
+            after_png = _nearest_upscale_png(after_rgba)
+
+            summary_text = "\n".join(summary_lines)
+            blocks: list[str | MCPImage] = [
+                summary_text,
+                "before:",
+                MCPImage(data=before_png, format="png"),
+                "after:",
+                MCPImage(data=after_png, format="png"),
+            ]
+
+            if not import_to_sprite:
+                return blocks
+
+            assert path is not None  # import_to_sprite branch always sets it
+            px_lua = ",".join(f"{x},{y},{int(out[y, x])}" for y in range(th) for x in range(tw))
+            # An explicit palette (preset/list) and an auto-extracted one both have
+            # to be written onto the sprite; only the "default to whatever the
+            # sprite already has" case can skip it.
+            if palette is not None:
+                color_lua = ",".join(
+                    f"Color{{r={r},g={g},b={b},a={a}}}" for r, g, b, a in (hex_to_rgba(c) for c in palette_hex)
+                )
+                set_palette_lua = (
+                    f"local newpal = Palette({len(palette_hex)})\n"
+                    f"local __c = {{{color_lua}}}\n"
+                    "for i, c in ipairs(__c) do newpal:setColor(i - 1, c) end\n"
+                    "spr:setPalette(newpal)\n"
+                )
+            else:
+                set_palette_lua = ""
+
+            push_snapshot(session, path)
+            bridge.execute(
                 f"local spr = J.sprite({lua_str(path)})\n"
-                "local pal = spr.palettes[1]\n"
-                "local hex = {}\n"
-                "for i = 0, #pal - 1 do\n"
-                "  local c = pal:getColor(i)\n"
-                '  hex[i+1] = string.format("#%02x%02x%02x", c.red, c.green, c.blue)\n'
-                "end\nreturn { hex = hex }"
-            )
-            sprite_hex = pal_result["hex"]
-
-        bible = session.active_style()
-        palette_hex = _resolve_palette(
-            palette, sprite_hex, rgba, palette_size,
-            project_hex=bible.palette if bible is not None else None,
-        )
-
-        idx, alpha_mask, report = run_conform(rgba, (tw, th), palette_hex, dither=dither, fit=fit)
-        # Index 0 is always transparent in Aseprite regardless of its color
-        # (drawing.py's get_region_as_grid documents the same rule) -- force it
-        # everywhere conform's alpha threshold says the pixel isn't there.
-        out = np.where(alpha_mask, idx, 0).astype(np.int32)
-
-        cleanup_report: dict[str, int] = {}
-        if auto_cleanup:
-            out, cleanup_report = run_pipeline(out, palette_hex, list(OPERATIONS), aggressiveness)
-
-        summary_lines = [
-            f"Conformed {image_path} -> {tw}x{th}, {len(palette_hex)}-color palette.",
-            f"Fitted to {report['fitted_size'][0]}x{report['fitted_size'][1]} "
-            f"({'aspect preserved' if fit == 'contain' else 'stretched to fill'}).",
-            f"Source grid: cell={report['grid']['cell_w']}x{report['grid']['cell_h']} "
-            f"confidence={report['grid']['confidence']:.2f} "
-            f"({'snapped' if report['grid']['is_pixel_art'] else 'ratio downscale'}).",
-        ]
-        if auto_cleanup:
-            summary_lines.append(
-                "cleanup: " + ", ".join(f"{op}={n}px" for op, n in cleanup_report.items())
+                + set_palette_lua
+                + "local __layer = spr.layers[1]\n"
+                "local __cel = __layer:cel(1)\n"
+                "if not __cel then __cel = spr:newCel(__layer, 1) end\n"
+                "J.tx(function()\n"
+                "  local img = __cel.image:clone()\n"
+                f"  local px = {{{px_lua}}}\n"
+                "  for k = 1, #px, 3 do img:drawPixel(px[k], px[k+1], px[k+2]) end\n"
+                "  __cel.image = img\n"
+                "end)\n"
+                "J.save(spr)\nreturn { ok = true }"
             )
 
-        before_png = _downscale_lanczos_png(rgba)
-        pal_rgba = np.array([(*hex_to_rgba(h)[:3], 255) for h in palette_hex], dtype=float) / 255.0
-        after_rgba = pal_rgba[out]
-        # Alpha must come from the post-cleanup indices, not conform's original
-        # mask: cleanup moves pixels to index 0, which Aseprite renders as
-        # transparent regardless of what color entry 0 holds. Reusing the stale
-        # mask paints those pixels as palette[0] at full opacity, so the preview
-        # shows speckle that isn't in the sprite that actually got written.
-        after_rgba[..., 3] = (out != 0).astype(float)
-        after_png = _nearest_upscale_png(after_rgba)
-
-        summary_text = "\n".join(summary_lines)
-        blocks: list[str | MCPImage] = [
-            summary_text,
-            "before:",
-            MCPImage(data=before_png, format="png"),
-            "after:",
-            MCPImage(data=after_png, format="png"),
-        ]
-
-        if not import_to_sprite:
+            blocks[0] = summary_text + "\nWritten to sprite."
+            if preview:
+                blocks.extend(emit(bridge, session.config.previews, path, "", True)[1:])
             return blocks
-
-        assert path is not None  # import_to_sprite branch always sets it
-        px_lua = ",".join(f"{x},{y},{int(out[y, x])}" for y in range(th) for x in range(tw))
-        # An explicit palette (preset/list) and an auto-extracted one both have
-        # to be written onto the sprite; only the "default to whatever the
-        # sprite already has" case can skip it.
-        if palette is not None:
-            color_lua = ",".join(
-                f"Color{{r={r},g={g},b={b},a={a}}}" for r, g, b, a in (hex_to_rgba(c) for c in palette_hex)
-            )
-            set_palette_lua = (
-                f"local newpal = Palette({len(palette_hex)})\n"
-                f"local __c = {{{color_lua}}}\n"
-                "for i, c in ipairs(__c) do newpal:setColor(i - 1, c) end\n"
-                "spr:setPalette(newpal)\n"
-            )
-        else:
-            set_palette_lua = ""
-
-        push_snapshot(session, path)
-        bridge.execute(
-            f"local spr = J.sprite({lua_str(path)})\n"
-            + set_palette_lua
-            + "local __layer = spr.layers[1]\n"
-            "local __cel = __layer:cel(1)\n"
-            "if not __cel then __cel = spr:newCel(__layer, 1) end\n"
-            "J.tx(function()\n"
-            "  local img = __cel.image:clone()\n"
-            f"  local px = {{{px_lua}}}\n"
-            "  for k = 1, #px, 3 do img:drawPixel(px[k], px[k+1], px[k+2]) end\n"
-            "  __cel.image = img\n"
-            "end)\n"
-            "J.save(spr)\nreturn { ok = true }"
-        )
-
-        blocks[0] = summary_text + "\nWritten to sprite."
-        if preview:
-            blocks.extend(emit(bridge, session.config.previews, path, "", True)[1:])
-        return blocks

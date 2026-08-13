@@ -47,74 +47,78 @@ def register(mcp: MCPServer) -> None:
         Example — clean up a freshly imported reference, gently:
             cleanup(operations=["remove_aa", "remove_orphans"], aggressiveness=0.3)
         """
-        ops = list(operations) if operations is not None else list(OPERATIONS)
-        unknown = [o for o in ops if o not in OPERATIONS]
-        if unknown:
-            raise ToolError(
-                code="unknown_cleanup_operation",
-                message=f"Unknown cleanup operation(s): {unknown}.",
-                hint=f"Valid operations are {list(OPERATIONS)}; omit the argument to run all.",
-                context={"valid": list(OPERATIONS)},
+        # One span across the whole read-modify-write: the pixels written
+        # below are computed from the read above, so another tool landing
+        # between them would be clobbered by our stale result (CLAUDE.md #2).
+        with bridge.serialized():
+            ops = list(operations) if operations is not None else list(OPERATIONS)
+            unknown = [o for o in ops if o not in OPERATIONS]
+            if unknown:
+                raise ToolError(
+                    code="unknown_cleanup_operation",
+                    message=f"Unknown cleanup operation(s): {unknown}.",
+                    hint=f"Valid operations are {list(OPERATIONS)}; omit the argument to run all.",
+                    context={"valid": list(OPERATIONS)},
+                )
+            if not 0.0 <= aggressiveness <= 1.0:
+                raise ToolError(
+                    code="aggressiveness_out_of_range",
+                    message=f"aggressiveness={aggressiveness} is outside 0.0-1.0.",
+                    hint="Use 0.5 unless you have a reason; higher repairs more, eats more detail.",
+                )
+
+            path = session.resolve_sprite(sprite)
+            read = bridge.execute(
+                f"local spr = J.sprite({lua_str(path)})\n"
+                f"{_resolve_layer_lua(layer)}\n"
+                f"local __frame = {frame}\n"
+                "if not spr.frames[__frame] then error('frame_out_of_range: ' .. __frame) end\n"
+                "local __cel = __layer:cel(__frame)\n"
+                "local rows = {}\n"
+                "for row = 0, spr.height - 1 do\n"
+                "  local r = {}\n"
+                "  for col = 0, spr.width - 1 do\n"
+                "    r[col+1] = __cel and __cel.image:getPixel(col, row) or 0\n"
+                "  end\n"
+                "  rows[row+1] = r\n"
+                "end\n"
+                "local pal, hex = spr.palettes[1], {}\n"
+                "for i = 0, #pal - 1 do\n"
+                "  local c = pal:getColor(i)\n"
+                '  hex[i+1] = string.format("#%02x%02x%02x", c.red, c.green, c.blue)\n'
+                "end\n"
+                "return { rows = rows, hex = hex }"
             )
-        if not 0.0 <= aggressiveness <= 1.0:
-            raise ToolError(
-                code="aggressiveness_out_of_range",
-                message=f"aggressiveness={aggressiveness} is outside 0.0-1.0.",
-                hint="Use 0.5 unless you have a reason; higher repairs more, eats more detail.",
+            idx = np.array(read["rows"], dtype=np.int32)
+            out, report = run_pipeline(idx, read["hex"], ops, aggressiveness)
+
+            changed = np.argwhere(out != idx)
+            summary_lines = [f"{op}: {n} pixels" for op, n in report.items()]
+            if changed.size == 0:
+                return emit(
+                    bridge,
+                    session.config.previews,
+                    path,
+                    "Already clean — nothing changed.\n" + "\n".join(summary_lines),
+                    preview,
+                )
+
+            px_lua = ",".join(f"{int(x)},{int(y)},{int(out[y, x])}" for y, x in changed)
+            push_snapshot(session, path)
+            bridge.execute(
+                f"local spr = J.sprite({lua_str(path)})\n"
+                f"{_resolve_layer_lua(layer)}\n"
+                f"local __cel = __layer:cel({frame})\n"
+                f"if not __cel then __cel = spr:newCel(__layer, {frame}) end\n"
+                "J.tx(function()\n"
+                "  local img = __cel.image:clone()\n"
+                f"  local px = {{{px_lua}}}\n"
+                "  for k = 1, #px, 3 do img:drawPixel(px[k], px[k+1], px[k+2]) end\n"
+                "  __cel.image = img\n"
+                "end)\n"
+                "J.save(spr)\n"
+                "return { ok = true }"
             )
 
-        path = session.resolve_sprite(sprite)
-        read = bridge.execute(
-            f"local spr = J.sprite({lua_str(path)})\n"
-            f"{_resolve_layer_lua(layer)}\n"
-            f"local __frame = {frame}\n"
-            "if not spr.frames[__frame] then error('frame_out_of_range: ' .. __frame) end\n"
-            "local __cel = __layer:cel(__frame)\n"
-            "local rows = {}\n"
-            "for row = 0, spr.height - 1 do\n"
-            "  local r = {}\n"
-            "  for col = 0, spr.width - 1 do\n"
-            "    r[col+1] = __cel and __cel.image:getPixel(col, row) or 0\n"
-            "  end\n"
-            "  rows[row+1] = r\n"
-            "end\n"
-            "local pal, hex = spr.palettes[1], {}\n"
-            "for i = 0, #pal - 1 do\n"
-            "  local c = pal:getColor(i)\n"
-            '  hex[i+1] = string.format("#%02x%02x%02x", c.red, c.green, c.blue)\n'
-            "end\n"
-            "return { rows = rows, hex = hex }"
-        )
-        idx = np.array(read["rows"], dtype=np.int32)
-        out, report = run_pipeline(idx, read["hex"], ops, aggressiveness)
-
-        changed = np.argwhere(out != idx)
-        summary_lines = [f"{op}: {n} pixels" for op, n in report.items()]
-        if changed.size == 0:
-            return emit(
-                bridge,
-                session.config.previews,
-                path,
-                "Already clean — nothing changed.\n" + "\n".join(summary_lines),
-                preview,
-            )
-
-        px_lua = ",".join(f"{int(x)},{int(y)},{int(out[y, x])}" for y, x in changed)
-        push_snapshot(session, path)
-        bridge.execute(
-            f"local spr = J.sprite({lua_str(path)})\n"
-            f"{_resolve_layer_lua(layer)}\n"
-            f"local __cel = __layer:cel({frame})\n"
-            f"if not __cel then __cel = spr:newCel(__layer, {frame}) end\n"
-            "J.tx(function()\n"
-            "  local img = __cel.image:clone()\n"
-            f"  local px = {{{px_lua}}}\n"
-            "  for k = 1, #px, 3 do img:drawPixel(px[k], px[k+1], px[k+2]) end\n"
-            "  __cel.image = img\n"
-            "end)\n"
-            "J.save(spr)\n"
-            "return { ok = true }"
-        )
-
-        summary = f"Cleaned {len(changed)} pixels.\n" + "\n".join(summary_lines)
-        return emit(bridge, session.config.previews, path, summary, preview)
+            summary = f"Cleaned {len(changed)} pixels.\n" + "\n".join(summary_lines)
+            return emit(bridge, session.config.previews, path, summary, preview)

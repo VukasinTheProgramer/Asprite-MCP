@@ -46,12 +46,13 @@ def push_snapshot(session: SessionState, path: str) -> None:
         return
     snap = _dir_for(session, path) / f"{uuid.uuid4().hex}.aseprite"
     shutil.copy2(src, snap)
-    stack = session.undo_stack.setdefault(path, [])
-    stack.append(snap)
-    while len(stack) > MAX_SNAPSHOTS:
-        stack.pop(0).unlink(missing_ok=True)
-    for old in session.redo_stack.pop(path, []):
-        old.unlink(missing_ok=True)
+    with session.lock:
+        stack = session.undo_stack.setdefault(path, [])
+        stack.append(snap)
+        while len(stack) > MAX_SNAPSHOTS:
+            stack.pop(0).unlink(missing_ok=True)
+        for old in session.redo_stack.pop(path, []):
+            old.unlink(missing_ok=True)
 
 
 def _alive(pid: int) -> bool:
@@ -97,6 +98,11 @@ def sweep_stale_history(config: Config) -> int:
 
 
 def _shift(session: SessionState, path: str, steps: int, frm: str, to: str) -> int:
+    with session.lock:
+        return _shift_locked(session, path, steps, frm, to)
+
+
+def _shift_locked(session: SessionState, path: str, steps: int, frm: str, to: str) -> int:
     from_stack: list[Path] = getattr(session, frm).setdefault(path, [])
     to_stack: list[Path] = getattr(session, to).setdefault(path, [])
     applied = 0

@@ -2,6 +2,9 @@ import json
 import os
 import subprocess
 import tempfile
+import threading
+from contextlib import contextmanager
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
@@ -24,6 +27,16 @@ class BatchBridge:
 
     def __init__(self, exe: Path):
         self.exe = exe
+        # CLAUDE.md #2. Not defensive -- load-bearing (#30): tools are plain
+        # `def`, so the SDK runs each on a worker thread and real concurrent
+        # calls reach here. Every command is open -> mutate -> save on the whole
+        # file, so two overlapping calls are a lost update: measured, four
+        # concurrent draw_grid calls landed one and silently discarded three,
+        # every one of them returning success. Serialising makes concurrency
+        # slow rather than wrong, which is the right trade for a single-threaded
+        # backend.
+        # Reentrant so a tool holding serialized() can still call execute().
+        self._lock = threading.RLock()
 
     def start(self) -> None:
         pass  # nothing to start; each call is its own process
@@ -35,6 +48,19 @@ class BatchBridge:
     def alive(self) -> bool:
         return True
 
+    @contextmanager
+    def serialized(self) -> Iterator[None]:
+        """Hold the bridge for a whole read-modify-write.
+
+        Locking each execute() alone fixes the common case (one call that opens,
+        mutates and saves) but not a tool that reads pixels, computes, then
+        writes them back: another call landing between the two would be clobbered
+        by the stale write. `cleanup`, `conform_image` and `import_reference` all
+        have that shape.
+        """
+        with self._lock:
+            yield
+
     def execute(self, lua: str, timeout: float = 10.0) -> Any:
         # 10s matches the AsepriteBridge protocol default and §10.5's
         # resource limit. Was 30.0 here — silently overriding the protocol's
@@ -43,6 +69,10 @@ class BatchBridge:
         # Same calling convention as the resident bridge: the command is a
         # function body, its `return` value is the result. Tools stay
         # backend-agnostic — they never know which bridge is running them.
+        with self._lock:
+            return self._execute_locked(lua, timeout)
+
+    def _execute_locked(self, lua: str, timeout: float) -> Any:
         chunk = (
             f"local J = (function()\n{PRELUDE}\nend)()\n"
             f"local __out = (function()\n{lua}\nend)()\n"

@@ -1,3 +1,4 @@
+import threading
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -32,6 +33,12 @@ class SessionState:
     # fall back to this project's values so the model stops re-choosing them
     # per sprite — that drift is what makes a generated library look unrelated.
     active_project: str | None = None
+    # Tools are plain `def`, so the SDK runs each on a worker thread and they
+    # mutate this state concurrently. Dict writes are individually safe under
+    # the GIL, but push_snapshot's append-then-clear-the-redo-branch is a
+    # read-modify-write and is not. Held only around state edits, never around a
+    # bridge call -- that is the bridge's own lock's job.
+    lock: threading.RLock = field(default_factory=threading.RLock, repr=False)
     # File-snapshot undo/redo (history.py). Keyed by sprite path. Aseprite's
     # own app.undo() is a no-op across batch's per-command fresh processes —
     # there's no persistent in-memory undo stack to call it on. Verified
