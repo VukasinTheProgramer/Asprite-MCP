@@ -4,6 +4,7 @@ from aseprite_mcp.cleanup import (
     OPERATIONS,
     enforce_palette,
     fix_jaggies,
+    merge_near_colors,
     remove_antialiasing,
     remove_orphans,
     run_pipeline,
@@ -166,3 +167,35 @@ def test_run_pipeline_never_quantizes_transparency():
     out, _ = run_pipeline(idx, _RAMP, ["remove_aa"], aggressiveness=1.0)
 
     assert np.array_equal(out == 0, idx == 0)  # alpha mask identical either way
+
+
+def test_merge_near_colors_collapses_a_chain_of_near_duplicates():
+    # indices 1,2,3 are near-identical blues a tiny OKLab step apart -- a
+    # painterly source's MEDIANCUT extraction leaves chains like this. Index 4
+    # is a genuinely distinct color and must survive untouched.
+    palette = ["#000000", "#1a2a3a", "#1c2c3c", "#1e2e3e", "#ff8800"]
+    idx = np.array([[0, 1, 2], [3, 4, 1]], dtype=np.int32)
+
+    out, changed = merge_near_colors(idx, palette, threshold=0.05)
+
+    merged_to = {int(out[0, 1]), int(out[0, 2]), int(out[1, 0]), int(out[1, 2])}
+    assert len(merged_to) == 1  # 1, 2, 3 all collapsed to the same index
+    assert out[1, 1] == 4  # the distinct color untouched
+    assert changed > 0
+
+
+def test_merge_near_colors_never_touches_transparency():
+    # index 0 sits numerically close to index 1 in OKLab but must never merge --
+    # merging into 0 would silently turn opaque pixels transparent.
+    palette = ["#000000", "#010101"]
+    idx = np.array([[0, 1]], dtype=np.int32)
+
+    out, changed = merge_near_colors(idx, palette, threshold=1.0)
+
+    assert changed == 0
+    assert np.array_equal(out, idx)
+
+
+def test_merge_near_colors_is_a_noop_on_a_well_separated_palette():
+    out, changed = merge_near_colors(_fringed_sprite(), _RAMP, threshold=0.03)
+    assert changed == 0

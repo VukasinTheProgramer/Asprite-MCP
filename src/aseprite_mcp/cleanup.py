@@ -7,7 +7,7 @@ import numpy as np
 from scipy import ndimage
 from skimage.measure import label
 
-from .color import oklab_to_rgb, quantize_rgb, rgb_to_oklab
+from .color import oklab_to_rgb, palette_lab, quantize_rgb, rgb_to_oklab
 from .validation import hex_to_rgba
 
 
@@ -194,6 +194,53 @@ def fix_jaggies(idx: np.ndarray, max_correction: int = 1) -> tuple[np.ndarray, i
     return out, changed
 
 
+def merge_near_colors(
+    idx: np.ndarray,
+    palette_hex: list[str],
+    threshold: float = 0.03,
+    protect: frozenset[int] = frozenset({0}),
+) -> tuple[np.ndarray, int]:
+    """Remap pixels using palette entries within OKLab distance `threshold` of
+    each other onto a single representative index (transitively -- a chain of
+    five near-identical blues collapses to one, not five pairs).
+
+    Fixes a specific failure mode of downscale_modal on continuously-shaded
+    (painterly) source art: a 32-color palette extracted from a gradient often
+    contains many near-duplicate shades a step apart, and downscale_modal's
+    per-block 2-means clustering picks a different one of them in each
+    neighboring block almost arbitrarily, leaving flat regions looking like
+    salt-and-pepper noise even though every pixel is on-palette and no single
+    pixel is individually wrong. Confirmed empirically (B6 gate re-run):
+    remove_aa/remove_orphans/fix_jaggies don't touch this pattern at any
+    aggressiveness -- the "noise" pixels are 20-40px fragments, past the size
+    orphan removal can touch without eating real detail, and they aren't
+    blends, so remove_aa correctly leaves them alone.
+    """
+    pal_lab = palette_lab(palette_hex)
+    n = len(palette_hex)
+    parent = list(range(n))
+
+    def find(a: int) -> int:
+        while parent[a] != a:
+            a = parent[a]
+        return a
+
+    for i in range(n):
+        if i in protect:
+            continue
+        for j in range(i + 1, n):
+            if j in protect:
+                continue
+            if float(np.sqrt(((pal_lab[i] - pal_lab[j]) ** 2).sum())) < threshold:
+                ri, rj = find(i), find(j)
+                if ri != rj:
+                    parent[max(ri, rj)] = min(ri, rj)
+
+    remap = np.array([find(i) for i in range(n)])
+    out = remap[idx]
+    return out, int((out != idx).sum())
+
+
 def enforce_palette(
     rgb: np.ndarray,
     palette_hex: list[str],
@@ -207,7 +254,7 @@ def enforce_palette(
 
 # --- Pipeline ----------------------------------------------------------------
 
-OPERATIONS = ("remove_aa", "remove_orphans", "fix_jaggies")
+OPERATIONS = ("merge_near_colors", "remove_aa", "remove_orphans", "fix_jaggies")
 
 
 def run_pipeline(
@@ -217,12 +264,14 @@ def run_pipeline(
     aggressiveness: float = 0.5,
 ) -> tuple[np.ndarray, dict[str, int]]:
     """Apply cleanup operations to an indexed image, in a fixed order regardless
-    of the order requested: AA removal creates specks, orphan removal clears
-    them, jaggie regularization wants a settled edge to measure. Returns
-    (result, pixels changed per operation).
+    of the order requested: color merging collapses near-duplicate shades before
+    anything else runs (AA/orphan detection is cleaner against fewer, more
+    separated colors), AA removal creates specks, orphan removal clears them,
+    jaggie regularization wants a settled edge to measure. Returns (result,
+    pixels changed per operation).
 
     `aggressiveness` (0-1) maps onto each operation's threshold — one knob the
-    model can turn instead of four it has to reason about.
+    model can turn instead of five it has to reason about.
 
     `enforce_palette` is deliberately not an operation here: the sprite is
     already indexed, so it would be a no-op. It belongs in the conform pipeline,
@@ -237,7 +286,9 @@ def run_pipeline(
         if op not in operations:
             continue
         before = out
-        if op == "remove_aa":
+        if op == "merge_near_colors":
+            out, _ = merge_near_colors(out, palette_hex, threshold=0.01 + 0.04 * a)
+        elif op == "remove_aa":
             rgb = remove_antialiasing(pal_rgb[out], threshold=0.06 + 0.14 * a)
             snapped = enforce_palette(rgb, palette_hex).astype(idx.dtype)
             # Index 0 is transparency, not a color. Round-tripping it through RGB
