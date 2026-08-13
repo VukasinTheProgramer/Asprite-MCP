@@ -87,12 +87,21 @@ def extract_palette(
     alpha: np.ndarray | None = None,
     max_samples: int = 50_000,
     seed: int = 0,
+    reserve_index_0: bool = True,
 ) -> list[str]:
     """Derive an n-color palette from an image by k-means in OKLab.
 
     rgb (H,W,3) float [0,1]; `alpha` (H,W) optionally restricts sampling to
     visible pixels, so a removed background doesn't spend palette entries on
     colors that won't be drawn.
+
+    `reserve_index_0` keeps entry 0 as a placeholder, because Aseprite renders
+    index 0 as transparent whatever color sits there. Without it, k-means hands
+    a real color to entry 0 and every pixel quantized to it becomes a hole:
+    measured on the B6 gate, a pixel-art turtle whose outline clustered to
+    #000000 at index 0 lost 36% of its pixels — the outline and everything it
+    enclosed. Clusters are computed on n_colors - 1 so the usable count still
+    matches what the caller asked for.
 
     Clustering in OKLab rather than RGB is the same rule as quantization
     (CLAUDE.md #12) and matters more here, not less: PIL's median-cut splits
@@ -111,15 +120,19 @@ def extract_palette(
         visible = alpha.reshape(-1) > 0
         if visible.any():
             pixels = pixels[visible]
-    if pixels.size == 0:
-        return ["#000000"]
+    # A placeholder distinct from anything the art is likely to use, so a stray
+    # index-0 pixel is visibly wrong rather than silently plausible.
+    slot0 = ["#ff00ff"] if reserve_index_0 else []
+    want = n_colors - len(slot0)
+    if pixels.size == 0 or want < 1:
+        return slot0 + ["#000000"]
 
     lab = rgb_to_oklab(pixels)
     rng = np.random.default_rng(seed)
     if len(lab) > max_samples:
         lab = lab[rng.choice(len(lab), max_samples, replace=False)]
 
-    n = min(n_colors, len(np.unique(lab, axis=0)))
+    n = min(want, len(np.unique(lab, axis=0)))
     if n < 1:
         n = 1
     centroids, labels = kmeans2(lab, n, minit="++", iter=40, seed=seed)
@@ -129,7 +142,7 @@ def extract_palette(
     used = sorted(set(labels.tolist()))
     centroids = centroids[used] if used else centroids
 
-    out = []
+    out = list(slot0)
     for r, g, b in oklab_to_rgb(centroids):
         out.append(f"#{round(r * 255):02x}{round(g * 255):02x}{round(b * 255):02x}")
     return out

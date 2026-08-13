@@ -78,4 +78,28 @@ def test_extract_palette_handles_fewer_unique_colors_than_requested():
 
     pal = extract_palette(rgb, n_colors=16, seed=0)
 
-    assert 1 <= len(pal) <= 2  # never fabricates entries that claimed no pixels
+    # index 0 is the reserved transparency slot; the art itself contributes at
+    # most 2. Still never fabricates entries that claimed no pixels.
+    assert 2 <= len(pal) <= 3
+    assert 1 <= len(pal[1:]) <= 2
+
+
+def test_extract_palette_reserves_index_0_for_transparency():
+    """Aseprite renders index 0 transparent whatever color sits there. If
+    k-means hands entry 0 a real color, every pixel quantized to it becomes a
+    hole -- the B6 gate lost 36% of a pixel-art turtle this way, its black
+    outline having clustered to index 0."""
+    import numpy as np
+
+    rgb = np.zeros((8, 8, 3))          # solid black: k-means' obvious cluster
+    pal = extract_palette(rgb, n_colors=4, seed=0)
+    assert pal[0] == "#ff00ff", "index 0 must be a placeholder, not art"
+    assert "#000000" in pal[1:], "the real color still has to be in the palette"
+
+
+def test_extract_palette_opt_out_still_gives_every_entry_to_the_art():
+    import numpy as np
+
+    rgb = np.zeros((8, 8, 3))
+    pal = extract_palette(rgb, n_colors=4, seed=0, reserve_index_0=False)
+    assert pal[0] != "#ff00ff"
