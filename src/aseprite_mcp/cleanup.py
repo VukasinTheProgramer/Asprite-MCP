@@ -8,6 +8,7 @@ from scipy import ndimage
 from skimage.measure import label
 
 from .color import oklab_to_rgb, palette_lab, quantize_rgb, rgb_to_oklab
+from .errors import ToolError
 from .validation import hex_to_rgba
 
 
@@ -252,9 +253,140 @@ def enforce_palette(
     return quantize_rgb(rgb, palette_hex, weights=(lightness_weight, 1.0, 1.0))
 
 
+def close_silhouette(
+    idx: np.ndarray, radius: int = 1, transparent: int = 0
+) -> tuple[np.ndarray, int]:
+    """Binary-close the opaque mask to fill 1px pinholes, then open it to shave
+    1px protrusions. Filled holes take the majority color of their own ring, so
+    closing never invents a color that wasn't already local to the gap.
+
+    Downscaling a shape with a thin neck routinely punches a hole through it or
+    leaves a single-pixel whisker hanging off the edge; both read as damage
+    rather than as an intentional shape.
+    """
+    st = np.ones((2 * radius + 1, 2 * radius + 1), dtype=bool)
+    solid = idx != transparent
+    closed = ndimage.binary_closing(solid, st)
+    # border_value=1 so the array edge counts as filled. Without it the erosion
+    # half of the opening treats everything outside the canvas as background and
+    # eats a 1px border off any shape that runs to the edge — which for a sprite
+    # cropped to its own content is most of them.
+    opened = ndimage.binary_opening(closed, st, border_value=1)
+
+    out = idx.copy()
+    out[solid & ~opened] = transparent  # protrusions shaved off
+
+    filled = opened & ~solid
+    if filled.any():
+        comps, n = label(filled, connectivity=2, return_num=True)
+        for comp_id in range(1, n + 1):
+            comp = comps == comp_id
+            ring = ndimage.binary_dilation(comp, np.ones((3, 3), dtype=bool)) & solid
+            neighbors = idx[ring]
+            if neighbors.size:
+                vals, counts = np.unique(neighbors, return_counts=True)
+                out[comp] = vals[counts.argmax()]
+    return out, int((out != idx).sum())
+
+
+def thin_lines(idx: np.ndarray, transparent: int = 0) -> tuple[np.ndarray, int]:
+    """Collapse 2px-wide runs of a color back to 1px where the run is a line
+    rather than a filled region.
+
+    A run qualifies only if it is 2px in one axis AND the color forms a thin
+    structure there — measured by the component's own thickness, so a 2px-wide
+    detail inside a large filled shape is left alone. Removed pixels take the
+    color of whatever is on the outer side, so the line thins rather than
+    growing a hole.
+    """
+    out = idx.copy()
+    for color in np.unique(idx):
+        if color == transparent:
+            continue
+        mask = idx == color
+        # distance transform: max value is the component's half-thickness, so a
+        # genuine 1-2px line peaks at 1, a filled blob peaks much higher
+        dist = ndimage.distance_transform_cdt(mask, metric="chessboard")
+        comps, n = label(mask, connectivity=2, return_num=True)
+        for comp_id in range(1, n + 1):
+            comp = comps == comp_id
+            if comp.sum() < 4 or dist[comp].max() > 1:
+                continue  # not a thin line — leave filled regions alone
+            ys, xs = np.nonzero(comp)
+            # Thin perpendicular to the line's own direction: a horizontal line
+            # is 2px tall and must lose a row, a vertical one is 2px wide and
+            # must lose a column. Scanning only one axis (the first cut of this
+            # did) silently no-ops on half of all lines.
+            horizontal = (xs.max() - xs.min()) >= (ys.max() - ys.min())
+            axis = comp.T if horizontal else comp
+            for line_no in range(axis.shape[0]):
+                on = axis[line_no]
+                if not on.any():
+                    continue
+                for start, end in _spans(on):
+                    if end - start != 2:
+                        continue
+                    # drop the far pixel — bottom of a horizontal line, right of
+                    # a vertical one, i.e. the side an upper-left light hides
+                    drop = end - 1
+                    if horizontal:
+                        out[drop, line_no] = transparent
+                    else:
+                        out[line_no, drop] = transparent
+    return out, int((out != idx).sum())
+
+
+def remove_doubles(idx: np.ndarray) -> tuple[np.ndarray, int]:
+    """Collapse duplicated adjacent rows/columns left by grid misdetection.
+
+    When `detect_grid` picks a cell one pixel off, the resample emits the same
+    row twice; the sprite then reads as the right art at the wrong aspect. Only
+    fully-identical neighbours collapse, so deliberately flat art is untouched.
+    Returns a possibly *smaller* array — callers must handle the shape change.
+    """
+    rows = [0] + [y for y in range(1, idx.shape[0]) if not np.array_equal(idx[y], idx[y - 1])]
+    tmp = idx[rows]
+    cols = [0] + [x for x in range(1, tmp.shape[1]) if not np.array_equal(tmp[:, x], tmp[:, x - 1])]
+    out = tmp[:, cols]
+    return out, int(idx.size - out.size)
+
+
+def snap_grid(idx: np.ndarray, cell_w: int, cell_h: int, offset_x: int = 0, offset_y: int = 0) -> tuple[np.ndarray, int]:
+    """Force every detected grid cell to a single color — its own modal color.
+
+    Pairs with `grid.detect_grid`: once a cell size is known with confidence,
+    any within-cell variation is resample noise by definition, because the
+    source art had one color there.
+    """
+    if cell_w < 1 or cell_h < 1:
+        raise ToolError(
+            code="snap_grid_bad_cell",
+            message=f"cell_w={cell_w}, cell_h={cell_h} — both must be >= 1.",
+            hint="Take these from detect_grid, and only when is_pixel_art is true.",
+        )
+    out = idx.copy()
+    H, W = idx.shape
+    for y0 in range(-(offset_y % cell_h), H, cell_h):
+        for x0 in range(-(offset_x % cell_w), W, cell_w):
+            block = idx[max(0, y0) : y0 + cell_h, max(0, x0) : x0 + cell_w]
+            if block.size == 0:
+                continue
+            vals, counts = np.unique(block, return_counts=True)
+            out[max(0, y0) : y0 + cell_h, max(0, x0) : x0 + cell_w] = vals[counts.argmax()]
+    return out, int((out != idx).sum())
+
+
 # --- Pipeline ----------------------------------------------------------------
 
-OPERATIONS = ("merge_near_colors", "remove_aa", "remove_orphans", "fix_jaggies")
+# Order here is the order they run in (see run_pipeline), not the order given.
+OPERATIONS = (
+    "merge_near_colors",
+    "remove_aa",
+    "remove_orphans",
+    "close_silhouette",
+    "thin_lines",
+    "fix_jaggies",
+)
 
 
 def run_pipeline(
@@ -300,8 +432,19 @@ def run_pipeline(
             out = snapped
         elif op == "remove_orphans":
             out, _ = remove_orphans(out, min_size=int(round(1 + 3 * a)))
+        elif op == "close_silhouette":
+            out, _ = close_silhouette(out, radius=1)
+        elif op == "thin_lines":
+            out, _ = thin_lines(out)
         elif op == "fix_jaggies":
             out, _ = fix_jaggies(out, max_correction=int(round(2 * a)))
         report[op] = int((out != before).sum())
 
     return out, report
+
+
+# `snap_grid` and `remove_doubles` are deliberately absent from OPERATIONS.
+# Both need information the pipeline doesn't have (a detected grid) or change
+# the array's shape, and the cleanup tool diffs input against output pixel for
+# pixel to build its edit list. They belong in the conform path, which resizes
+# anyway — see conform.py. Calling them directly is fine.
