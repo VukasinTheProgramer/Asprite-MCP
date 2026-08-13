@@ -253,7 +253,12 @@ def register(mcp: MCPServer) -> None:
         before_png = _downscale_lanczos_png(rgba)
         pal_rgba = np.array([(*hex_to_rgba(h)[:3], 255) for h in palette_hex], dtype=float) / 255.0
         after_rgba = pal_rgba[out]
-        after_rgba[..., 3] = alpha_mask.astype(float)
+        # Alpha must come from the post-cleanup indices, not conform's original
+        # mask: cleanup moves pixels to index 0, which Aseprite renders as
+        # transparent regardless of what color entry 0 holds. Reusing the stale
+        # mask paints those pixels as palette[0] at full opacity, so the preview
+        # shows speckle that isn't in the sprite that actually got written.
+        after_rgba[..., 3] = (out != 0).astype(float)
         after_png = _nearest_upscale_png(after_rgba)
 
         summary_text = "\n".join(summary_lines)

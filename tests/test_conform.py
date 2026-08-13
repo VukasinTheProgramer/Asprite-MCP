@@ -100,3 +100,30 @@ def test_downscale_modal_preserves_hard_edge_no_blending():
     out = downscale_modal(rgb, (2, 1))
 
     assert set(tuple(np.round(c, 3)) for c in out[0]) <= {(1.0, 0.0, 0.0), (0.0, 0.0, 1.0)}
+
+
+def test_cleanup_output_alpha_must_derive_from_indices_not_conform_mask():
+    """Index 0 is transparent in Aseprite whatever color palette entry 0 holds.
+    Cleanup pushes pixels to index 0 that conform's alpha mask still calls
+    opaque, so anything rendering the result (previews) has to take alpha from
+    the post-cleanup indices. Taking it from the stale mask paints those pixels
+    in palette[0]'s color at full opacity -- visible speckle that is not in the
+    sprite that actually gets written."""
+    from aseprite_mcp.cleanup import OPERATIONS, run_pipeline
+
+    # subject plus isolated specks over a transparent field
+    rgba = np.zeros((64, 64, 4))
+    rgba[20:44, 20:44] = [0.8, 0.1, 0.1, 1.0]
+    rgba[5, 5] = [0.1, 0.8, 0.1, 1.0]
+    rgba[58, 58] = [0.1, 0.8, 0.1, 1.0]
+    palette = ["#1e1ec8", "#c81e1e", "#1ec81e"]
+
+    idx, alpha_mask, _ = conform(rgba, (16, 16), palette)
+    pre = np.where(alpha_mask, idx, 0).astype(np.int32)
+    post, _ = run_pipeline(pre, palette, list(OPERATIONS), aggressiveness=0.5)
+
+    stale = int(((post == 0) & alpha_mask).sum())
+    assert stale > 0, "fixture no longer exercises the divergence"
+    # the correct rule: alpha follows the indices, so no index-0 pixel is opaque
+    derived_alpha = post != 0
+    assert not ((post == 0) & derived_alpha).any()
