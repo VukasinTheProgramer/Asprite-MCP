@@ -58,11 +58,19 @@ class SessionState:
 
     def resolve_sprite(self, sprite: str | None) -> str:
         """Which sprite a tool should act on: the explicit param, or the active one."""
-        target = sprite or self.active
-        if not target:
+        if sprite:
+            # An explicit param is a workspace-relative name, exactly like the one
+            # create_sprite took — resolve it the same way. Without this it reaches
+            # Lua verbatim and Aseprite resolves it against the server process's cwd,
+            # so every tool's `sprite` argument misses the workspace entirely.
+            from .validation import safe_path
+
+            name = sprite if Path(sprite).suffix else f"{sprite}.aseprite"
+            return str(safe_path(name, self.config.workspace))
+        if not self.active:
             raise ToolError(
                 code="no_active_sprite",
                 message="No sprite specified and none is active.",
                 hint="Call create_sprite first, or pass sprite=<path>.",
             )
-        return target
+        return self.active
