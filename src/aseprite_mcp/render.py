@@ -27,7 +27,10 @@ def render_preview(
     bridge.execute(
         f"local spr = J.sprite({lua_str(sprite_path)})\n"
         f"if not spr.frames[{frame}] then error('frame_out_of_range: {frame}') end\n"
-        "local img = Image(spr.width, spr.height, spr.colorMode)\n"
+        # RGB, not spr.colorMode: a standalone Image carries no palette, so saving an
+        # indexed one to PNG resolves every index to black. drawSprite composites
+        # through the sprite's palette when the target is RGB.
+        "local img = Image(spr.width, spr.height, ColorMode.RGB)\n"
         f"img:drawSprite(spr, {frame})\n"
         f"img:saveAs({lua_str(str(tmp))})\n"
         "return { w = spr.width, h = spr.height }"
